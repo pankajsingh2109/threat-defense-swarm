@@ -63,3 +63,15 @@ This document records technical decisions, milestones, real issues encountered, 
 - **Root Cause**: Hardcoded `httpx.AsyncClient` attempted TCP connection to port 8001, timing out when no server process was listening.
 - **Solution & Why Chosen**: Introduced `shared/utilities/http.py` with `set_override_clients` to allow mounting `ASGITransport(app=triage_app)` during in-process testing while maintaining real HTTP capability when running under Uvicorn/Docker.
 - **Tests Proving Fix**: `tests/integration/test_a2a_clarification.py` verified both threat processing and bounded clarification termination (exactly 2 attempts yielding `INSUFFICIENT_CONTEXT`). 12 total suite tests passing.
+
+---
+
+## Milestone 6: Bounded Investigation Loop & Transient Failure Recovery
+- **Status**: Completed
+- **Date**: 2026-08-20
+- **Summary**: Verified that Resolution Agent investigation loop is strictly bounded at `<= 3` iterations and tested transient HTTP 503 retry recovery.
+
+### Engineering Notes & Verification
+- Loop Bound Verification: Confirmed investigation loop terminates after at most 3 iterations.
+- Tool Failure Recovery: Tested mock tool HTTP 503 failures with exponential backoff retries. When retry budget was exhausted, `tool_503_exhausted` was logged in telemetry and system rendered final verdict based on remaining evidence without crashing.
+- Test Suite: `tests/integration/test_investigation_resilience.py` passed cleanly. 14 total suite tests passing.
