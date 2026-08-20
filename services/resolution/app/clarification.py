@@ -3,14 +3,13 @@ from typing import Optional, Tuple
 from shared.config import settings
 from shared.logger import setup_logger
 from shared.schemas.a2a import A2AContext, ClarificationRequest, ClarificationResponse, MessageType
-from shared.schemas.events import TerminalResult, Verdict
+from shared.utilities.http import get_triage_client
 
 logger = setup_logger("resolution-clarification")
 MAX_CLARIFICATION_ATTEMPTS = 2
 
 async def handle_clarification_loop(
-    context: A2AContext,
-    run_id: Optional[str] = None
+    context: A2AContext
 ) -> Tuple[A2AContext, int, bool]:
     """
     Executes bounded clarification loop (max 2 attempts) with Service 1 if context is incomplete.
@@ -35,16 +34,21 @@ async def handle_clarification_loop(
         )
 
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.post(f"{settings.triage_url}/a2a/clarify", json=req.model_dump())
-                if resp.status_code == 200:
-                    clar_resp = ClarificationResponse(**resp.json())
-                    if "source_ip" in clar_resp.provided_data and clar_resp.provided_data["source_ip"]:
-                        context.source_ip = clar_resp.provided_data["source_ip"]
-                        logger.info(f"Clarification successful on attempt {attempt}: IP={context.source_ip}")
-                        return context, attempts, True
+            override_client = get_triage_client()
+            if override_client is not None:
+                resp = await override_client.post(f"{settings.triage_url}/a2a/clarify", json=req.model_dump())
+            else:
+                async with httpx.AsyncClient(timeout=0.1) as client:
+                    resp = await client.post(f"{settings.triage_url}/a2a/clarify", json=req.model_dump())
+
+            if resp.status_code == 200:
+                clar_resp = ClarificationResponse(**resp.json())
+                if "source_ip" in clar_resp.provided_data and clar_resp.provided_data["source_ip"]:
+                    context.source_ip = clar_resp.provided_data["source_ip"]
+                    logger.info(f"Clarification successful on attempt {attempt}: IP={context.source_ip}")
+                    return context, attempts, True
         except Exception as e:
-            logger.warning(f"Clarification request failed on attempt {attempt}: {e}")
+            logger.warning(f"Clarification request attempt {attempt} failed: {e}")
 
     logger.warning(f"Clarification loop exhausted ({MAX_CLARIFICATION_ATTEMPTS} attempts) for threat: {context.threat_id}")
     return context, attempts, False

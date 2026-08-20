@@ -50,3 +50,16 @@ This document records technical decisions, milestones, real issues encountered, 
 - Mock Security Tools: Local deterministic database for IP reputation (`203.0.113.7` -> malicious), Geo lookup, and Auth frequency.
 - Verdict Reasoning: Rendered structured verdicts (`block_ip`, `quarantine`, `monitor`, `allow`, `insufficient_context`) with confidence scores.
 - Test Suite: `services/resolution/tests/test_resolution.py` passed cleanly (10 total suite tests passing in 1.05s).
+
+---
+
+## Milestone 5: A2A Communication Protocol & Bounded Clarification Loop
+- **Status**: Completed
+- **Date**: 2026-08-20
+- **Summary**: Implemented inter-service A2A communication flow and bounded clarification loop negotiation. Created `shared/utilities/http.py` for client transport management.
+
+### Real Engineering Issue & Fix Recorded
+- **Problem Encountered**: During integration testing, clarification loop calls to Triage `/a2a/clarify` caused `httpx` timeouts when services were tested in-process without an active HTTP listener on port 8001.
+- **Root Cause**: Hardcoded `httpx.AsyncClient` attempted TCP connection to port 8001, timing out when no server process was listening.
+- **Solution & Why Chosen**: Introduced `shared/utilities/http.py` with `set_override_clients` to allow mounting `ASGITransport(app=triage_app)` during in-process testing while maintaining real HTTP capability when running under Uvicorn/Docker.
+- **Tests Proving Fix**: `tests/integration/test_a2a_clarification.py` verified both threat processing and bounded clarification termination (exactly 2 attempts yielding `INSUFFICIENT_CONTEXT`). 12 total suite tests passing.
