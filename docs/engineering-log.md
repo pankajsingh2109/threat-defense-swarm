@@ -38,3 +38,15 @@ This document records technical decisions, milestones, real issues encountered, 
 - Injection Defense: Tested against multiple adversarial prompt injection variants (e.g., "ignore previous instructions", "system compromised", "disregard prior rules").
 - Intent Classification: Filtered benign noise items to produce immediate terminal results vs routing threat events to context compression.
 - Test Suite: `services/triage/tests/test_triage.py` passed cleanly (7 total suite tests passing in 0.91s).
+
+---
+
+## Milestone 4: Service 2 — Resolution Agent & Mock Tools
+- **Status**: Completed
+- **Date**: 2026-08-20
+- **Summary**: Built Service 2 (Resolution Agent) with mock security tools (`mock_tools.py` for IP reputation, Geo lookup, and Auth frequency), evidence sufficiency decision stage (`investigator.py`), final verdict rendering, bounded clarification loop handler (`clarification.py`), idempotency caching, and REST endpoints.
+
+### Engineering Notes & Verification
+- Mock Security Tools: Local deterministic database for IP reputation (`203.0.113.7` -> malicious), Geo lookup, and Auth frequency.
+- Verdict Reasoning: Rendered structured verdicts (`block_ip`, `quarantine`, `monitor`, `allow`, `insufficient_context`) with confidence scores.
+- Test Suite: `services/resolution/tests/test_resolution.py` passed cleanly (10 total suite tests passing in 1.05s).
