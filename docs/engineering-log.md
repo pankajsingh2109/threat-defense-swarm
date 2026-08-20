@@ -75,3 +75,14 @@ This document records technical decisions, milestones, real issues encountered, 
 - Loop Bound Verification: Confirmed investigation loop terminates after at most 3 iterations.
 - Tool Failure Recovery: Tested mock tool HTTP 503 failures with exponential backoff retries. When retry budget was exhausted, `tool_503_exhausted` was logged in telemetry and system rendered final verdict based on remaining evidence without crashing.
 - Test Suite: `tests/integration/test_investigation_resilience.py` passed cleanly. 14 total suite tests passing.
+
+---
+
+## Milestone 7: Service 3 — Saboteur / Chaos Injector
+- **Status**: Completed
+- **Date**: 2026-08-20
+- **Summary**: Built Service 3 (Saboteur / Chaos Injector) as an independent asynchronous service supporting seedable random number generation (`ChaosInjector`), prompt injection poisoning, A2A packet drops, forced tool 503 errors, and REST control endpoints (`/chaos/config`, `/chaos/reset-seed`).
+
+### Engineering Notes & Verification
+- Seed Reproducibility: Confirmed 100% deterministic reproducibility when seeded (`ChaosInjector(seed=12345)`).
+- Test Suite: `services/saboteur/tests/test_saboteur.py` passed cleanly. 17 total suite tests passing.
