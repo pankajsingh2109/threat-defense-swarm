@@ -9,6 +9,7 @@ from shared.schemas.a2a import (
     A2AEnvelope, A2AContext, ClarificationRequest, ClarificationResponse, MessageType
 )
 from shared.resilience import execute_with_retry
+from shared.utilities.http import get_resolution_client
 from services.triage.app.sanitizer import sanitize_input
 from services.triage.app.classifier import classify_intent, compress_context
 
@@ -83,14 +84,21 @@ async def ingest_event(item: RawStreamItem):
     resolution_endpoint = f"{settings.resolution_url}/a2a/investigate"
     
     async def _send_a2a():
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(resolution_endpoint, json=envelope.model_dump())
+        override = get_resolution_client()
+        if override is not None:
+            resp = await override.post("/a2a/investigate", json=envelope.model_dump())
             if resp.status_code != 200:
                 raise HTTPException(status_code=resp.status_code, detail=f"Service 2 error: {resp.text}")
             return resp.json()
+        else:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                resp = await client.post(resolution_endpoint, json=envelope.model_dump())
+                if resp.status_code != 200:
+                    raise HTTPException(status_code=resp.status_code, detail=f"Service 2 error: {resp.text}")
+                return resp.json()
 
     try:
-        response_data = await execute_with_retry(_send_a2a, max_retries=3, initial_delay=0.1)
+        response_data = await execute_with_retry(_send_a2a, max_retries=3, initial_delay=0.05)
         latency_ms = (time.time() - start_time) * 1000
         if isinstance(response_data, dict) and "verdict" in response_data:
             response_data["latency_ms"] = latency_ms

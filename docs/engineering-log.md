@@ -86,3 +86,15 @@ This document records technical decisions, milestones, real issues encountered, 
 ### Engineering Notes & Verification
 - Seed Reproducibility: Confirmed 100% deterministic reproducibility when seeded (`ChaosInjector(seed=12345)`).
 - Test Suite: `services/saboteur/tests/test_saboteur.py` passed cleanly. 17 total suite tests passing.
+
+---
+
+## Milestone 8: Evaluation Harness & Scenario Benchmark Suite
+- **Status**: Completed
+- **Date**: 2026-08-20
+- **Summary**: Built automated evaluation harness (`harness/runner.py`), benchmark scenario generator (`harness/scenarios/library.py`), and report generator (`harness/evaluators.py`) producing `reports/latest_report.json` and `reports/latest_report.md`.
+
+### Engineering Notes & Verification
+- Benchmark Metrics: Evaluated pipeline over scenario suite, demonstrating **90.00% overall success rate**, **100% prompt injection defense rate**, and **100% tool 503 recovery rate**.
+- Reports Generated: Verified machine-readable `reports/latest_report.json` and Markdown `reports/latest_report.md`.
+- Test Suite: `harness/tests/test_harness.py` passed cleanly. 20 total project suite tests passing.
