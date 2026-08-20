@@ -26,3 +26,15 @@ This document records technical decisions, milestones, real issues encountered, 
 - Schema Validation: Pydantic v2 schemas for all payloads with strict bounds and field validation.
 - Unit Testing: `tests/unit/test_shared.py` passed (A2A envelope serialization, FIFO idempotency eviction, exponential backoff retries).
 - Test Results: 4 passing tests in 0.38s.
+
+---
+
+## Milestone 3: Service 1 — Triage Agent & Prompt Injection Defense
+- **Status**: Completed
+- **Date**: 2026-08-20
+- **Summary**: Built Service 1 (Triage Agent) featuring input sanitization (`sanitizer.py`), prompt injection boundary guards (`<data>` tag framing), intent classification engine (`classifier.py`) supporting OpenAI structured outputs with fallback mock driver, context compression producing lean `A2AContext` objects, and `/ingest` & `/a2a/clarify` REST endpoints.
+
+### Engineering Notes & Verification
+- Injection Defense: Tested against multiple adversarial prompt injection variants (e.g., "ignore previous instructions", "system compromised", "disregard prior rules").
+- Intent Classification: Filtered benign noise items to produce immediate terminal results vs routing threat events to context compression.
+- Test Suite: `services/triage/tests/test_triage.py` passed cleanly (7 total suite tests passing in 0.91s).
