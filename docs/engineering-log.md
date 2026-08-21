@@ -98,3 +98,22 @@ This document records technical decisions, milestones, real issues encountered, 
 - Benchmark Metrics: Evaluated pipeline over scenario suite, demonstrating **90.00% overall success rate**, **100% prompt injection defense rate**, and **100% tool 503 recovery rate**.
 - Reports Generated: Verified machine-readable `reports/latest_report.json` and Markdown `reports/latest_report.md`.
 - Test Suite: `harness/tests/test_harness.py` passed cleanly. 20 total project suite tests passing.
+
+---
+
+## Milestone 9: End-to-End Integration, Docker Compose & Final System Hardening
+- **Status**: Completed
+- **Date**: 2026-08-20
+- **Summary**: Added end-to-end integration test suite (`tests/e2e/test_end_to_end.py`), Dockerfiles for each microservice (`services/triage/Dockerfile`, `services/resolution/Dockerfile`, `services/saboteur/Dockerfile`), `docker-compose.yml`, `Makefile`, and `README.md`.
+
+### Engineering Notes & Final Self-Audit
+- E2E Verification: Executed full test suite (`pytest`) across 23 test modules (unit, integration, chaos, e2e, harness). All 23 tests passed cleanly.
+- Definition of Done Verified:
+  1. Service 1, Service 2, Service 3 fully operational as independent microservices.
+  2. Structured REST A2A communication protocol active.
+  3. Prompt injection defenses resilient (`<data>` boundary tag framing).
+  4. Clarification loop bounded at max 2 attempts.
+  5. Investigation loop bounded at max 3 iterations.
+  6. Tool retries and HTTP 503 recovery active.
+  7. Automated 100-run Evaluation Harness operational.
+  8. Meaningful local Git commit history recorded without remote pushes.
