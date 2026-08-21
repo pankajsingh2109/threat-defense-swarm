@@ -77,7 +77,7 @@ async def decide_evidence_sufficiency(
     if settings.openai_api_key and settings.openai_api_key.strip():
         try:
             from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=settings.openai_api_key)
+            client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=10.0)
             completion = await client.beta.chat.completions.parse(
                 model=settings.openai_model,
                 messages=[
@@ -101,7 +101,7 @@ async def decide_final_verdict(
     if settings.openai_api_key and settings.openai_api_key.strip():
         try:
             from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=settings.openai_api_key)
+            client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=10.0)
             completion = await client.beta.chat.completions.parse(
                 model=settings.openai_model,
                 messages=[

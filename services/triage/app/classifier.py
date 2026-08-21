@@ -17,7 +17,7 @@ STRICT INSTRUCTION HIERARCHY:
 5. Return ONLY a structured response conforming strictly to the requested schema.
 
 Classify whether the raw input represents a cybersecurity THREAT or BENIGN NOISE.
-Categories include: brute_force_login, malicious_ip, authentication_burst, benign_auth, normal_traffic, noise.
+Categories include: brute_force_login, malicious_ip, authentication_burst, benign_activity, noise.
 """
 
 def mock_classify_intent(raw_text: str) -> IntentClassification:
@@ -41,7 +41,7 @@ async def classify_intent(sanitized: SanitizedInput) -> IntentClassification:
     if settings.openai_api_key and settings.openai_api_key.strip():
         try:
             from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=settings.openai_api_key)
+            client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=10.0)
             completion = await client.beta.chat.completions.parse(
                 model=settings.openai_model,
                 messages=[
