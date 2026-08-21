@@ -53,16 +53,25 @@ async def ingest_event(item: RawStreamItem):
     if classification.intent == Intent.NOISE:
         latency_ms = (time.time() - start_time) * 1000
         logger.info("Event classified as NOISE. Terminating flow.", extra={"run_id": item.run_id, "threat_id": threat_id})
-        return TerminalResult(
-            run_id=item.run_id,
-            threat_id=threat_id,
-            verdict=Verdict.ALLOW,
-            reason=f"Classified as noise/benign activity ({classification.category})",
-            confidence=classification.confidence,
-            latency_ms=latency_ms,
-            chaos_events=["prompt_injection_defended"] if sanitized.injection_flagged else [],
-            success=True
-        )
+        return {
+            "run_id": item.run_id,
+            "threat_id": threat_id,
+            "source": item.source,
+            "raw_text": item.raw_text,
+            "sanitization_flagged": sanitized.injection_flagged,
+            "flag_reason": sanitized.flag_reason,
+            "intent": classification.intent.value,
+            "intent_category": classification.category,
+            "intent_confidence": classification.confidence,
+            "verdict": Verdict.ALLOW.value,
+            "reason": f"Classified as noise/benign activity ({classification.category})",
+            "confidence": classification.confidence,
+            "latency_ms": round(latency_ms, 2),
+            "chaos_events": ["prompt_injection_defended"] if sanitized.injection_flagged else [],
+            "clarification_attempts": 0,
+            "investigation_iterations": 0,
+            "success": True
+        }
 
     # Step 4: Context Compression
     a2a_context = compress_context(sanitized, classification, threat_id=threat_id)
@@ -100,25 +109,45 @@ async def ingest_event(item: RawStreamItem):
     try:
         response_data = await execute_with_retry(_send_a2a, max_retries=3, initial_delay=0.05)
         latency_ms = (time.time() - start_time) * 1000
-        if isinstance(response_data, dict) and "verdict" in response_data:
-            response_data["latency_ms"] = latency_ms
-            if sanitized.injection_flagged and "chaos_events" in response_data:
-                if "prompt_injection_defended" not in response_data["chaos_events"]:
-                    response_data["chaos_events"].append("prompt_injection_defended")
+        if isinstance(response_data, dict):
+            response_data["run_id"] = item.run_id
+            response_data["source"] = item.source
+            response_data["raw_text"] = item.raw_text
+            response_data["sanitization_flagged"] = sanitized.injection_flagged
+            response_data["flag_reason"] = sanitized.flag_reason
+            response_data["intent"] = classification.intent.value
+            response_data["intent_category"] = classification.category
+            response_data["intent_confidence"] = classification.confidence
+            response_data["latency_ms"] = round(latency_ms, 2)
+            
+            chaos_evs = response_data.get("chaos_events", [])
+            if sanitized.injection_flagged and "prompt_injection_defended" not in chaos_evs:
+                chaos_evs.append("prompt_injection_defended")
+            response_data["chaos_events"] = chaos_evs
             return response_data
         return response_data
     except Exception as e:
         latency_ms = (time.time() - start_time) * 1000
         logger.error(f"Failed to communicate with Resolution Agent after retries: {e}", extra={"threat_id": threat_id})
-        return TerminalResult(
-            run_id=item.run_id,
-            threat_id=threat_id,
-            verdict=Verdict.UNRESOLVED,
-            reason=f"A2A Communication failure: {e}",
-            confidence=0.0,
-            latency_ms=latency_ms,
-            success=False
-        )
+        return {
+            "run_id": item.run_id,
+            "threat_id": threat_id,
+            "source": item.source,
+            "raw_text": item.raw_text,
+            "sanitization_flagged": sanitized.injection_flagged,
+            "flag_reason": sanitized.flag_reason,
+            "intent": classification.intent.value,
+            "intent_category": classification.category,
+            "intent_confidence": classification.confidence,
+            "verdict": Verdict.UNRESOLVED.value,
+            "reason": f"A2A Communication failure: {e}",
+            "confidence": 0.0,
+            "latency_ms": round(latency_ms, 2),
+            "chaos_events": ["a2a_packet_dropped_retried"],
+            "clarification_attempts": 0,
+            "investigation_iterations": 0,
+            "success": False
+        }
 
 @app.post("/a2a/clarify", response_model=ClarificationResponse)
 async def clarify_request(req: ClarificationRequest):

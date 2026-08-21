@@ -17,7 +17,7 @@ def calculate_percentile(values: List[float], percentile: float) -> float:
     return d0 + d1
 
 def generate_evaluation_report(run_results: List[Dict[str, Any]], output_dir: str = "reports") -> Dict[str, Any]:
-    """Calculates overall harness evaluation metrics and writes JSON and Markdown report files."""
+    """Calculates overall harness evaluation metrics and writes detailed JSON and Markdown report files."""
     os.makedirs(output_dir, exist_ok=True)
     
     total_runs = len(run_results)
@@ -72,39 +72,74 @@ def generate_evaluation_report(run_results: List[Dict[str, Any]], output_dir: st
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(report_summary, f, indent=2)
 
-    # Generate Markdown report
-    md_content = f"""# Threat Defense Swarm — Automated Evaluation Report
+    # Generate Detailed Markdown report for ALL inputs
+    md_content = f"""# Threat Defense Swarm — 100-Run Comprehensive Evaluation Report
 
 **Total Benchmark Runs**: {total_runs}  
-**Overall Success Rate**: {success_rate:.2f}%  
-**Failure Rate**: {failure_rate:.2f}%  
+**Overall Benchmark Success Rate**: `{success_rate:.2f}%`  
+**Failure Rate**: `{failure_rate:.2f}%`  
 
 ---
 
-## Performance Latency Summary
-- **Mean Latency**: {mean_latency:.2f} ms
-- **P50 Latency**: {p50_latency:.2f} ms
-- **P95 Latency**: {p95_latency:.2f} ms
-- **P99 Latency**: {p99_latency:.2f} ms
+## ⚡ Performance Latency Summary
+- **Mean Latency**: `{mean_latency:.2f} ms`
+- **P50 Latency**: `{p50_latency:.2f} ms`
+- **P95 Latency**: `{p95_latency:.2f} ms`
+- **P99 Latency**: `{p99_latency:.2f} ms`
 
 ---
 
-## Resilience & Chaos Metrics
-| Metric | Rate (%) |
-| :--- | :--- |
-| **Prompt Injection Defense Rate** | `{prompt_defense_rate:.2f}%` |
-| **Tool 503 Recovery Rate** | `{tool_503_recovery_rate:.2f}%` |
-| **Clarification Success Rate** | `{clarification_success_rate:.2f}%` |
-| **Unresolved / Insufficient Context Rate** | `{unresolved_rate:.2f}%` |
+## 🛡️ Resilience & Chaos Condition Metrics
+| Metric | Rate (%) | Description |
+| :--- | :--- | :--- |
+| **Prompt Injection Defense Rate** | `{prompt_defense_rate:.2f}%` | Neutralization rate of injected imperative jailbreak payloads |
+| **Tool 503 Recovery Rate** | `{tool_503_recovery_rate:.2f}%` | Resilient recovery rate under transient HTTP 503 tool failures |
+| **Clarification Success Rate** | `{clarification_success_rate:.2f}%` | Resolution rate of bounded clarification requests to Triage |
+| **Unresolved / Insufficient Context Rate** | `{unresolved_rate:.2f}%` | Percentage of cases capped at terminal insufficient context |
 
 ---
 
-## Sample Run Detail Log (First 10 Runs)
-| Run ID | Threat ID | Verdict | Expected | Latency (ms) | Success |
-| :--- | :--- | :--- | :--- | :--- | :--- |
+## 📊 Complete 100-Run Stage-by-Stage Trace Log
+
+| Run ID | Raw Input Excerpt | Intent Classification | Saboteur Chaos Interference | Clarification / Investigation | Actual Verdict | Expected | Latency (ms) | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 """
-    for r in run_results[:10]:
-        md_content += f"| `{r.get('run_id')}` | `{r.get('threat_id')}` | `{r.get('verdict')}` | `{r.get('expected_verdict')}` | `{r.get('latency_ms', 0):.1f}` | `{'PASS' if r.get('success') else 'FAIL'}` |\n"
+
+    for r in run_results:
+        raw_excerpt = r.get("raw_text", "").replace("\n", " ").strip()
+        if len(raw_excerpt) > 40:
+            raw_excerpt = raw_excerpt[:37] + "..."
+
+        intent_info = f"{r.get('intent', 'N/A')} (`{r.get('intent_category', 'N/A')}`)"
+        
+        chaos_list = r.get("chaos_events", [])
+        chaos_str = ", ".join(chaos_list) if chaos_list else "None"
+
+        loops_str = f"Clar: {r.get('clarification_attempts', 0)} / Inv: {r.get('investigation_iterations', 0)}"
+
+        status_str = "**PASS**" if r.get("success", False) else "**FAIL**"
+
+        md_content += f"| `{r.get('run_id')}` | `{raw_excerpt}` | {intent_info} | `{chaos_str}` | `{loops_str}` | `{r.get('verdict')}` | `{r.get('expected_verdict')}` | `{r.get('latency_ms', 0):.1f}` | {status_str} |\n"
+
+    md_content += "\n---\n\n## 🔍 Per-Run Deep Inspection Traces\n\n"
+
+    for r in run_results:
+        md_content += f"""<details>
+<summary><b>{r.get('run_id')} ({r.get('threat_id', 'N/A')}) — {r.get('verdict')}</b> [{ 'PASS' if r.get('success') else 'FAIL' }]</summary>
+
+- **Raw Stream Input**: `{r.get('raw_text')}`
+- **Source**: `{r.get('source')}`
+- **Input Sanitization**: `Injection Flagged: {r.get('sanitization_flagged', False)}` (`{r.get('flag_reason', 'None')}`)
+- **Intent Classification**: `Intent: {r.get('intent')}` | `Category: {r.get('intent_category')}` | `Confidence: {r.get('intent_confidence')}`
+- **Saboteur Chaos Events**: `{r.get('chaos_events', [])}`
+- **Clarification Attempts**: `{r.get('clarification_attempts', 0)}`
+- **Investigation Iterations**: `{r.get('investigation_iterations', 0)}`
+- **Final Verdict Rendered**: `{r.get('verdict')}`
+- **Expected Verdict**: `{r.get('expected_verdict')}`
+- **Execution Latency**: `{r.get('latency_ms', 0)} ms`
+- **Reasoning**: `{r.get('reason', 'N/A')}`
+
+</details>\n\n"""
 
     md_path = os.path.join(output_dir, "latest_report.md")
     with open(md_path, "w", encoding="utf-8") as f:

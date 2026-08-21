@@ -41,7 +41,7 @@ async def classify_intent(sanitized: SanitizedInput) -> IntentClassification:
     if settings.openai_api_key and settings.openai_api_key.strip():
         try:
             from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=10.0)
+            client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=3.0)
             completion = await client.beta.chat.completions.parse(
                 model=settings.openai_model,
                 messages=[
