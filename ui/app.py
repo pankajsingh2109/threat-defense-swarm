@@ -677,16 +677,18 @@ with tab_rag:
         st.markdown("## 🤖 RAG Cybersecurity Incident Intelligence Assistant")
         st.markdown("Ask natural language questions about past evaluation runs, failed/unresolved cases, threat investigations, or live system state.")
 
-        # Quick Suggestion Chips
-        st.caption("Quick Questions:")
-        q_c1, q_c2, q_c3 = st.columns(3)
+        # Quick Suggestion & Action Chips
+        st.caption("Quick Actions & Queries:")
+        q_c1, q_c2, q_c3, q_c4 = st.columns(4)
         preset_query = None
-        if q_c1.button("📊 What are our overall benchmark results?"):
+        if q_c1.button("⚡ Start All & Replay Queue"):
+            preset_query = "Please start all swarm services and then replay all pending unresolved cases."
+        if q_c2.button("📊 Benchmark Performance"):
             preset_query = "What are the overall benchmark results, success rates, and latency metrics?"
-        if q_c2.button("⚠️ List all unresolved cases & why they failed"):
+        if q_c3.button("⚠️ Unresolved Incidents"):
             preset_query = "List all unresolved or incomplete cases and explain why they failed during service downtime."
-        if q_c3.button("🛡️ Show prompt injection defense cases"):
-            preset_query = "Which cases had prompt injection attempts and how were they defended?"
+        if q_c4.button("🧹 Flush Resolved Cases"):
+            preset_query = "Flush all resolved cases from the Dead-Letter Queue."
 
         st.markdown("<br>", unsafe_allow_html=True)
 

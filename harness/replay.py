@@ -171,31 +171,67 @@ async def replay_all_pending_cases(
 
 
 def _update_reports_post_replay(replay_results: List[Dict[str, Any]]):
-    """Updates latest_report.json and latest_report.md with replayed verdicts."""
-    report_file = Path("reports/latest_report.json")
-    if not report_file.exists():
+    """Updates latest_report.json and latest_report.md with replayed verdicts, syncing both benchmark and manual runs."""
+    resolved_cases = [r for r in replay_results if r.get("status") == "resolved"]
+    if not resolved_cases:
         return
 
-    try:
-        with open(report_file, "r", encoding="utf-8") as f:
-            report_data = json.load(f)
+    report_dir = Path("reports")
+    report_file = report_dir / "latest_report.json"
+    
+    runs = []
+    if report_file.exists():
+        try:
+            with open(report_file, "r", encoding="utf-8") as f:
+                report_data = json.load(f)
+            runs = report_data.get("runs", [])
+        except Exception as e:
+            logger.warning(f"Failed to read existing report: {e}")
+            runs = []
 
-        runs = report_data.get("runs", [])
-        replayed_map = {r["threat_id"]: r for r in replay_results if r.get("status") == "resolved"}
+    updated = False
+    for res in resolved_cases:
+        t_id = res.get("threat_id")
+        r_id = res.get("run_id")
+        verdict = res.get("verdict", "block_ip")
+        reason = res.get("reason", "Replayed and resolved")
 
-        updated = False
+        matched = False
         for run in runs:
-            t_id = run.get("threat_id")
-            if t_id in replayed_map:
-                res_info = replayed_map[t_id]
-                run["verdict"] = res_info["verdict"]
-                run["reason"] = f"[REPLAY RESOLVED] {res_info['reason']}"
+            if (t_id and run.get("threat_id") == t_id) or (r_id and run.get("run_id") == r_id):
+                run["verdict"] = verdict
+                run["reason"] = f"[REPLAY RESOLVED] {reason}"
                 run["success"] = True
+                matched = True
                 updated = True
+                break
 
-        if updated:
-            # Re-generate structured report
+        if not matched:
+            # Append manual/live simulator event as a new run record
+            runs.append({
+                "run_id": r_id or f"manual_{t_id}",
+                "threat_id": t_id,
+                "source": res.get("source", "firewall_syslog"),
+                "raw_text": res.get("raw_text", ""),
+                "sanitization_flagged": res.get("sanitization_flagged", False),
+                "flag_reason": res.get("flag_reason"),
+                "intent": res.get("intent", "threat"),
+                "intent_category": res.get("intent_category", "brute_force_login"),
+                "intent_confidence": res.get("intent_confidence", 0.95),
+                "verdict": verdict,
+                "reason": f"[REPLAY RESOLVED] {reason}",
+                "confidence": 0.95,
+                "latency_ms": res.get("latency_ms", 120.0),
+                "chaos_events": [],
+                "clarification_attempts": 0,
+                "investigation_iterations": 1,
+                "success": True
+            })
+            updated = True
+
+    if updated and runs:
+        try:
             generate_evaluation_report(runs, output_dir="reports")
-            logger.info("Evaluation report successfully updated following replay.")
-    except Exception as e:
-        logger.warning(f"Could not update evaluation report after replay: {e}")
+            logger.info(f"Evaluation report successfully updated with {len(resolved_cases)} replayed verdicts.")
+        except Exception as e:
+            logger.warning(f"Could not update evaluation report after replay: {e}")

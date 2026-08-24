@@ -26,3 +26,16 @@ async def test_rag_engine_query():
     assert len(res["answer"]) > 10
     assert "sources" in res
     assert "system_status" in res
+
+
+@pytest.mark.asyncio
+async def test_rag_engine_tool_execution():
+    engine = SwarmRAGEngine()
+    
+    # Test flush_queue tool execution
+    flush_res = await engine.execute_tool("flush_queue", {"target": "resolved"})
+    assert flush_res["status"] == "success"
+
+    # Test tool dispatch in query
+    action_res = await engine.answer_query("Flush all resolved cases from queue")
+    assert "answer" in action_res
