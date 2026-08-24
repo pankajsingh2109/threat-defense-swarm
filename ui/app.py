@@ -15,9 +15,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+import importlib
 from shared.config import settings
 from shared.schemas.events import RawStreamItem, Verdict
-from shared.unresolved_queue import get_unresolved_cases, get_queue_stats, add_unresolved_case
+import shared.unresolved_queue as uq
+importlib.reload(uq)
+from shared.unresolved_queue import (
+    get_unresolved_cases, get_queue_stats, add_unresolved_case, clear_unresolved_cases
+)
 from ui.service_manager import ServiceManager, SERVICES_CONFIG
 from harness.runner import run_evaluation_benchmark
 from harness.replay import replay_all_pending_cases
@@ -120,6 +125,36 @@ CUSTOM_CSS = """
         border-radius: 20px;
         font-weight: 700;
         font-size: 0.85rem;
+    }
+
+    /* Animated Typing Bubble */
+    .chat-thinking {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 14px;
+        background: rgba(0, 240, 255, 0.1);
+        border: 1px solid rgba(0, 240, 255, 0.3);
+        border-radius: 16px;
+        color: #00f0ff;
+        font-size: 0.9rem;
+        font-weight: 500;
+        margin: 4px 0;
+    }
+    .chat-thinking .dot {
+        width: 7px;
+        height: 7px;
+        background-color: #00f0ff;
+        border-radius: 50%;
+        display: inline-block;
+        animation: pulseDot 1.4s infinite ease-in-out both;
+    }
+    .chat-thinking .dot:nth-child(1) { animation-delay: -0.32s; }
+    .chat-thinking .dot:nth-child(2) { animation-delay: -0.16s; }
+
+    @keyframes pulseDot {
+        0%, 80%, 100% { transform: scale(0.3); opacity: 0.3; }
+        40% { transform: scale(1); opacity: 1; }
     }
 
     .stButton>button {
@@ -336,7 +371,20 @@ with tab_dash:
                 st.plotly_chart(fig_hist, use_container_width=True)
 
         # Detailed Runs Table
-        st.markdown("### 📋 Evaluation Telemetry Records")
+        c_tbl_hdr, c_tbl_flush = st.columns([3, 1])
+        with c_tbl_hdr:
+            st.markdown("### 📋 Evaluation Telemetry Records")
+        with c_tbl_flush:
+            if st.button("🗑️ Flush Telemetry Records", key="flush_telemetry_btn", use_container_width=True):
+                if report_path.exists():
+                    report_path.unlink(missing_ok=True)
+                md_report = Path("reports/latest_report.md")
+                if md_report.exists():
+                    md_report.unlink(missing_ok=True)
+                st.success("Telemetry records flushed successfully!")
+                time.sleep(0.3)
+                st.rerun()
+
         if runs:
             c_f1, c_f2 = st.columns([1, 2])
             with c_f1:
@@ -519,136 +567,168 @@ with tab_exec:
 # TAB 3: 🔄 Unresolved Cases & Replay
 # ==========================================
 with tab_unres:
-    st.markdown("## 🔄 Dead-Letter Queue & Deferred Resolution Replayer")
-    
-    q_stats = get_queue_stats()
-    cases = get_unresolved_cases()
+    @st.fragment
+    def render_unresolved_tab():
+        st.markdown("## 🔄 Dead-Letter Queue & Deferred Resolution Replayer")
+        
+        q_stats = get_queue_stats()
+        cases = get_unresolved_cases()
 
-    # Informational Alert Banner
-    st.info(
-        "💡 **How Swarm Handles Service Downtime:**\n\n"
-        "When **Service 1 (Triage Gateway)** or **Service 2 (Resolution Agent)** is stopped or unreachable, "
-        "incidents that cannot be fully processed are safely captured into the **Dead-Letter Queue (`data/unresolved_cases.json`)**. "
-        "Once **ALL required services are online**, click the **Replay & Resolve** button below to complete resolution."
-    )
-
-    # Service Statuses (fast non-blocking probe)
-    s1_status = ServiceManager.get_service_status("triage")
-    s2_status = ServiceManager.get_service_status("resolution")
-    all_services_online = (s1_status["healthy"] and s2_status["healthy"])
-    can_replay = (q_stats["pending_cases"] > 0 and all_services_online)
-
-    # Queue Metrics
-    qc1, qc2, qc3, qc4 = st.columns(4)
-    with qc1:
-        st.metric("Total Logged in Queue", q_stats["total_cases"])
-    with qc2:
-        st.metric("⏳ Pending Resolution", q_stats["pending_cases"], delta="Waiting for Recovery" if q_stats["pending_cases"] > 0 else "Clear")
-    with qc3:
-        st.metric("✅ Successfully Resolved", q_stats["resolved_cases"])
-    with qc4:
-        readiness_label = "🟢 ALL READY" if all_services_online else "🔴 DEGRADED"
-        st.metric("Swarm Readiness", readiness_label, delta="S1 & S2 Online" if all_services_online else "Services Offline", delta_color="normal" if all_services_online else "inverse")
-
-    # Service Health Status Chips
-    c_s1, c_s2 = st.columns(2)
-    with c_s1:
-        s1_badge = "🟢 ONLINE" if s1_status["healthy"] else "🔴 OFFLINE"
-        st.caption(f"**Service 1 (Triage Agent):** `{s1_badge}` (Port {s1_status['port']})")
-    with c_s2:
-        s2_badge = "🟢 ONLINE" if s2_status["healthy"] else "🔴 OFFLINE"
-        st.caption(f"**Service 2 (Resolution Agent):** `{s2_badge}` (Port {s2_status['port']})")
-
-    # Health Guidance Banner
-    offline_services = []
-    if not s1_status["healthy"]:
-        offline_services.append("Service 1 (Triage Agent)")
-    if not s2_status["healthy"]:
-        offline_services.append("Service 2 (Resolution Agent)")
-
-    if q_stats["pending_cases"] > 0 and not all_services_online:
-        st.warning(f"⚠️ **Cannot replay yet.** The following required services are OFFLINE: **{', '.join(offline_services)}**. Please start them in the sidebar Control Room before clicking Replay.")
-    elif q_stats["pending_cases"] > 0 and all_services_online:
-        st.success("🟢 **All swarm services (Triage & Resolution) are ONLINE.** Ready to replay pending unresolved cases.")
-
-    st.markdown("---")
-
-    # Action Controls
-    btn_col1, btn_col2 = st.columns([2, 1])
-    with btn_col1:
-        if st.button("🔄 Replay & Resolve All Pending Cases", type="primary", use_container_width=True, disabled=not can_replay):
-            with st.spinner("Replaying pending unresolved cases through live Resolution Agent..."):
-                replay_summary = asyncio.run(replay_all_pending_cases(use_inprocess_fallback=False))
-                if replay_summary.get("resolved", 0) > 0:
-                    st.success(replay_summary["message"])
-                else:
-                    st.warning(replay_summary["message"])
-                time.sleep(0.5)
-                st.rerun()
-    with btn_col2:
-        if st.button("🧹 Fast Refresh Queue", use_container_width=True):
-            st.rerun()
-
-    # Unresolved Cases Data Table
-    st.markdown("### 📋 Queued Incident Backlog")
-    if cases:
-        df_cases = pd.DataFrame(cases)
-        st.dataframe(
-            df_cases[[
-                "threat_id", "status", "created_at", "intent_category", "failure_reason", "resolved_verdict", "resolved_at", "raw_text"
-            ]],
-            use_container_width=True,
-            height=350
+        # Informational Alert Banner
+        st.info(
+            "💡 **How Swarm Handles Service Downtime:**\n\n"
+            "When **Service 1 (Triage Gateway)** or **Service 2 (Resolution Agent)** is stopped or unreachable, "
+            "incidents that cannot be fully processed are safely captured into the **Dead-Letter Queue (`data/unresolved_cases.json`)**. "
+            "Once **ALL required services are online**, click the **Replay & Resolve** button below to complete resolution."
         )
-    else:
-        st.success("🎉 No unresolved incidents in the queue. All cases are currently resolved!")
+
+        # Service Statuses (fast non-blocking probe)
+        s1_status = ServiceManager.get_service_status("triage")
+        s2_status = ServiceManager.get_service_status("resolution")
+        all_services_online = (s1_status["healthy"] and s2_status["healthy"])
+        can_replay = (q_stats["pending_cases"] > 0 and all_services_online)
+
+        # Queue Metrics
+        qc1, qc2, qc3, qc4 = st.columns(4)
+        with qc1:
+            st.metric("Total Logged in Queue", q_stats["total_cases"])
+        with qc2:
+            st.metric("⏳ Pending Resolution", q_stats["pending_cases"], delta="Waiting for Recovery" if q_stats["pending_cases"] > 0 else "Clear")
+        with qc3:
+            st.metric("✅ Successfully Resolved", q_stats["resolved_cases"])
+        with qc4:
+            readiness_label = "🟢 ALL READY" if all_services_online else "🔴 DEGRADED"
+            st.metric("Swarm Readiness", readiness_label, delta="S1 & S2 Online" if all_services_online else "Services Offline", delta_color="normal" if all_services_online else "inverse")
+
+        # Service Health Status Chips
+        c_s1, c_s2 = st.columns(2)
+        with c_s1:
+            s1_badge = "🟢 ONLINE" if s1_status["healthy"] else "🔴 OFFLINE"
+            st.caption(f"**Service 1 (Triage Agent):** `{s1_badge}` (Port {s1_status['port']})")
+        with c_s2:
+            s2_badge = "🟢 ONLINE" if s2_status["healthy"] else "🔴 OFFLINE"
+            st.caption(f"**Service 2 (Resolution Agent):** `{s2_badge}` (Port {s2_status['port']})")
+
+        # Health Guidance Banner
+        offline_services = []
+        if not s1_status["healthy"]:
+            offline_services.append("Service 1 (Triage Agent)")
+        if not s2_status["healthy"]:
+            offline_services.append("Service 2 (Resolution Agent)")
+
+        if q_stats["pending_cases"] > 0 and not all_services_online:
+            st.warning(f"⚠️ **Cannot replay yet.** The following required services are OFFLINE: **{', '.join(offline_services)}**. Please start them in the sidebar Control Room before clicking Replay.")
+        elif q_stats["pending_cases"] > 0 and all_services_online:
+            st.success("🟢 **All swarm services (Triage & Resolution) are ONLINE.** Ready to replay pending unresolved cases.")
+
+        st.markdown("---")
+
+        # Action Controls
+        btn_col1, btn_col2 = st.columns([2, 1])
+        with btn_col1:
+            if st.button("🔄 Replay & Resolve All Pending Cases", type="primary", use_container_width=True, disabled=not can_replay):
+                with st.spinner("Replaying pending unresolved cases through live Resolution Agent..."):
+                    replay_summary = asyncio.run(replay_all_pending_cases(use_inprocess_fallback=False))
+                    if replay_summary.get("resolved", 0) > 0:
+                        st.success(replay_summary["message"])
+                    else:
+                        st.warning(replay_summary["message"])
+                    st.rerun(scope="fragment")
+        with btn_col2:
+            if st.button("🧹 Fast Refresh Queue", use_container_width=True):
+                st.rerun(scope="fragment")
+
+        # Unresolved Cases Data Table
+        c_bk_hdr, c_bk_flush1, c_bk_flush2 = st.columns([2, 1, 1])
+        with c_bk_hdr:
+            st.markdown("### 📋 Queued Incident Backlog")
+        with c_bk_flush1:
+            if st.button("🗑️ Flush Resolved Cases", key="flush_res_cases_btn", use_container_width=True, disabled=q_stats["resolved_cases"] == 0):
+                cleared = clear_unresolved_cases(status="resolved")
+                st.success(f"Flushed {cleared} resolved cases from backlog!")
+                st.rerun(scope="fragment")
+        with c_bk_flush2:
+            if st.button("🔥 Flush Entire Queue", key="flush_all_cases_btn", use_container_width=True, disabled=q_stats["total_cases"] == 0):
+                cleared = clear_unresolved_cases()
+                st.success(f"Flushed all {cleared} cases from queue!")
+                st.rerun(scope="fragment")
+
+        if cases:
+            df_cases = pd.DataFrame(cases)
+            st.dataframe(
+                df_cases[[
+                    "threat_id", "status", "created_at", "intent_category", "failure_reason", "resolved_verdict", "resolved_at", "raw_text"
+                ]],
+                use_container_width=True,
+                height=350
+            )
+        else:
+            st.success("🎉 No unresolved incidents in the queue. All cases are currently resolved!")
+
+    render_unresolved_tab()
 
 
 # ==========================================
 # TAB 4: 🤖 RAG Security Intelligence Chat
 # ==========================================
 with tab_rag:
-    st.markdown("## 🤖 RAG Cybersecurity Incident Intelligence Assistant")
-    st.markdown("Ask natural language questions about past evaluation runs, failed/unresolved cases, threat investigations, or live system state.")
+    @st.fragment
+    def render_rag_chat():
+        st.markdown("## 🤖 RAG Cybersecurity Incident Intelligence Assistant")
+        st.markdown("Ask natural language questions about past evaluation runs, failed/unresolved cases, threat investigations, or live system state.")
 
-    # Quick Suggestion Chips
-    st.caption("Quick Questions:")
-    q_c1, q_c2, q_c3 = st.columns(3)
-    preset_query = None
-    if q_c1.button("📊 What are our overall benchmark results?"):
-        preset_query = "What are the overall benchmark results, success rates, and latency metrics?"
-    if q_c2.button("⚠️ List all unresolved cases & why they failed"):
-        preset_query = "List all unresolved or incomplete cases and explain why they failed during service downtime."
-    if q_c3.button("🛡️ Show prompt injection defense cases"):
-        preset_query = "Which cases had prompt injection attempts and how were they defended?"
+        # Quick Suggestion Chips
+        st.caption("Quick Questions:")
+        q_c1, q_c2, q_c3 = st.columns(3)
+        preset_query = None
+        if q_c1.button("📊 What are our overall benchmark results?"):
+            preset_query = "What are the overall benchmark results, success rates, and latency metrics?"
+        if q_c2.button("⚠️ List all unresolved cases & why they failed"):
+            preset_query = "List all unresolved or incomplete cases and explain why they failed during service downtime."
+        if q_c3.button("🛡️ Show prompt injection defense cases"):
+            preset_query = "Which cases had prompt injection attempts and how were they defended?"
 
-    st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
 
-    # 📜 Dedicated Scrollable Chat Container (Keeps input box stickied below)
-    chat_container = st.container(height=480)
+        # 📜 Compact Scrollable Chat Container (Ensures input box stays pinned & visible on all screen heights)
+        chat_container = st.container(height=380)
 
-    with chat_container:
-        for msg in st.session_state.chat_history:
-            with st.chat_message(msg["role"], avatar="🛡️" if msg["role"] == "assistant" else "👤"):
-                st.markdown(msg["content"])
+        with chat_container:
+            for msg in st.session_state.chat_history:
+                with st.chat_message(msg["role"], avatar="🛡️" if msg["role"] == "assistant" else "👤"):
+                    st.markdown(msg["content"])
 
-    # 📌 Chat Input Box (Anchored at the bottom)
-    user_input = st.chat_input("Ask about benchmark results, unresolved cases, or threat analysis...")
-    active_prompt = preset_query or user_input
+        # 📌 Chat Input Box (Fixed at the bottom of the tab view)
+        user_input = st.chat_input("Ask about benchmark results, unresolved cases, or threat analysis...")
+        active_prompt = preset_query or user_input
 
-    if active_prompt:
-        # Add user message
-        st.session_state.chat_history.append({"role": "user", "content": active_prompt})
+        if active_prompt:
+            # 1. Append & Display user query directly in chat
+            st.session_state.chat_history.append({"role": "user", "content": active_prompt})
+            with chat_container:
+                with st.chat_message("user", avatar="👤"):
+                    st.markdown(active_prompt)
 
-        # Generate RAG response
-        with st.spinner("Retrieving telemetry knowledge and generating answer..."):
-            rag_response = asyncio.run(st.session_state.rag_engine.answer_query(active_prompt))
-            answer = rag_response["answer"]
+                # 2. Assistant response with in-bubble typing animation
+                with st.chat_message("assistant", avatar="🛡️"):
+                    bubble_placeholder = st.empty()
+                    bubble_placeholder.markdown(
+                        '<div class="chat-thinking"><span class="dot"></span><span class="dot"></span><span class="dot"></span> Analyzing Swarm telemetry & knowledge base...</div>',
+                        unsafe_allow_html=True
+                    )
 
-            # Append source block to answer
-            if rag_response.get("sources"):
-                source_titles = [f"• **[{s['doc_id']}]** {s['title']}" for s in rag_response["sources"][:3]]
-                answer += f"\n\n---\n**📚 Cited Knowledge Sources:**\n" + "\n".join(source_titles)
+                    rag_response = asyncio.run(st.session_state.rag_engine.answer_query(active_prompt))
+                    answer = rag_response["answer"]
 
-        st.session_state.chat_history.append({"role": "assistant", "content": answer})
-        st.rerun()
+                    # Append source block
+                    if rag_response.get("sources"):
+                        source_titles = [f"• **[{s['doc_id']}]** {s['title']}" for s in rag_response["sources"][:3]]
+                        answer += f"\n\n---\n**📚 Cited Knowledge Sources:**\n" + "\n".join(source_titles)
+
+                    # Replace bubble with markdown answer
+                    bubble_placeholder.markdown(answer)
+
+            # 3. Save assistant message without full-page refresh
+            st.session_state.chat_history.append({"role": "assistant", "content": answer})
+
+    render_rag_chat()

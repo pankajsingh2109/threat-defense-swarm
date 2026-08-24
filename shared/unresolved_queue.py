@@ -8,7 +8,8 @@ from shared.logger import setup_logger
 
 logger = setup_logger("unresolved-queue")
 
-DEFAULT_QUEUE_PATH = Path("data/unresolved_cases.json")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_QUEUE_PATH = PROJECT_ROOT / "data" / "unresolved_cases.json"
 _lock = threading.Lock()
 
 
@@ -150,3 +151,34 @@ def get_queue_stats(queue_path: Path = DEFAULT_QUEUE_PATH) -> Dict[str, Any]:
         "resolved_cases": resolved_count,
         "service_2_down_backlog": pending_count > 0
     }
+
+
+def clear_unresolved_cases(
+    status: Optional[str] = None,
+    queue_path: Path = DEFAULT_QUEUE_PATH
+) -> int:
+    """
+    Clears cases from the Dead-Letter Queue.
+    If status is provided (e.g. 'resolved'), only cases with that status are cleared.
+    If status is None, clears all cases. Returns count of cleared cases.
+    """
+    with _lock:
+        _ensure_dir(queue_path)
+        try:
+            with open(queue_path, "r", encoding="utf-8") as f:
+                cases = json.load(f)
+        except Exception:
+            cases = []
+
+        initial_len = len(cases)
+        if status:
+            remaining = [c for c in cases if c.get("status") != status]
+        else:
+            remaining = []
+
+        with open(queue_path, "w", encoding="utf-8") as f:
+            json.dump(remaining, f, indent=2)
+
+        cleared_count = initial_len - len(remaining)
+        logger.info(f"Cleared {cleared_count} cases from unresolved queue (Filter: {status or 'ALL'}).")
+        return cleared_count
