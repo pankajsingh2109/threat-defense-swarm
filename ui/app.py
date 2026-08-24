@@ -19,7 +19,7 @@ from shared.config import settings
 from shared.schemas.events import RawStreamItem, Verdict
 from shared.unresolved_queue import get_unresolved_cases, get_queue_stats, add_unresolved_case
 from ui.service_manager import ServiceManager, SERVICES_CONFIG
-from harness.runner import run_evaluation_benchmark, run_single_scenario
+from harness.runner import run_evaluation_benchmark
 from harness.replay import replay_all_pending_cases
 from rag.engine import SwarmRAGEngine
 
@@ -35,7 +35,7 @@ st.set_page_config(
 
 CUSTOM_CSS = """
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&family=Outfit:wght@300;400;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&family=Outfit:wght@300;400;500;600;700;800&display=swap');
     
     html, body, [class*="css"] {
         font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -44,17 +44,56 @@ CUSTOM_CSS = """
         font-family: 'JetBrains Mono', monospace !important;
     }
 
-    /* Gradient Background Cards */
-    .soc-card {
-        background: linear-gradient(135deg, rgba(20, 25, 45, 0.75) 0%, rgba(10, 15, 30, 0.9) 100%);
-        border: 1px solid rgba(0, 240, 255, 0.2);
+    /* Clean Crisp Result Card */
+    .result-card-clean {
+        background: #ffffff !important;
+        color: #0f172a !important;
         border-radius: 12px;
-        padding: 20px;
-        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-        backdrop-filter: blur(8px);
+        padding: 22px 24px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        margin-top: 15px;
         margin-bottom: 15px;
     }
-    
+    .result-card-clean h3 {
+        color: #0f172a !important;
+        margin-top: 0px !important;
+        margin-bottom: 12px !important;
+        font-size: 1.3rem !important;
+        font-weight: 800 !important;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .result-card-clean p, .result-card-clean span, .result-card-clean strong {
+        color: #334155 !important;
+        font-size: 0.95rem;
+        line-height: 1.6;
+    }
+    .result-card-clean code {
+        background: #f1f5f9 !important;
+        color: #0f172a !important;
+        border: 1px solid #cbd5e1 !important;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-weight: 600;
+    }
+
+    .verdict-pill {
+        display: inline-block;
+        padding: 4px 14px;
+        border-radius: 9999px;
+        font-weight: 800;
+        font-size: 0.9rem;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .verdict-pill-allow { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+    .verdict-pill-block { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
+    .verdict-pill-unresolved { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
+    .verdict-pill-warn { background: #fef3c7; color: #b45309; border: 1px solid #fcd34d; }
+
+    /* Badges */
     .status-badge-online {
         background-color: rgba(0, 255, 136, 0.15);
         color: #00ff88;
@@ -115,72 +154,76 @@ if "chat_history" not in st.session_state:
 # ==========================================
 # 🎛️ Sidebar: Microservice Control Room
 # ==========================================
-with st.sidebar:
-    st.markdown("## 🛡️ Swarm Control Room")
-    st.markdown("Manage distributed microservices lifecycle in real-time.")
-    
-    col_sb_ref, col_sb_all = st.columns(2)
-    with col_sb_ref:
-        if st.button("🔄 Refresh", use_container_width=True):
-            st.rerun()
-    with col_sb_all:
-        if st.button("⚡ Start All", use_container_width=True):
-            with st.spinner("Starting all services..."):
-                ServiceManager.start_all_services()
-                time.sleep(1.0)
+@st.fragment
+def render_sidebar():
+    with st.sidebar:
+        st.markdown("## 🛡️ Swarm Control Room")
+        st.markdown("Manage distributed microservices lifecycle in real-time.")
+        
+        col_sb_ref, col_sb_all = st.columns(2)
+        with col_sb_ref:
+            if st.button("🔄 Fast Refresh", use_container_width=True):
                 st.rerun()
+        with col_sb_all:
+            if st.button("⚡ Start All", use_container_width=True):
+                with st.spinner("Starting all services..."):
+                    ServiceManager.start_all_services()
+                    time.sleep(0.5)
+                    st.rerun()
 
-    st.markdown("---")
+        st.markdown("---")
 
-    # Fetch live statuses
-    statuses = ServiceManager.get_all_statuses()
+        # Fetch live statuses (fast non-blocking probe)
+        statuses = ServiceManager.get_all_statuses()
 
-    for key, cfg in SERVICES_CONFIG.items():
-        st_info = statuses[key]
-        is_healthy = st_info["healthy"]
-        status_label = st_info["status"]
-        badge_class = "status-badge-online" if is_healthy else ("status-badge-warn" if "START" in status_label or "UNHEALTHY" in status_label else "status-badge-offline")
+        for key, cfg in SERVICES_CONFIG.items():
+            st_info = statuses[key]
+            is_healthy = st_info["healthy"]
+            status_label = st_info["status"]
+            badge_class = "status-badge-online" if is_healthy else ("status-badge-warn" if "START" in status_label or "UNHEALTHY" in status_label else "status-badge-offline")
 
-        st.markdown(
-            f"""
-            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px; margin-bottom: 10px;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                    <strong style="color:{cfg['color']};">{cfg['name'].split('—')[0]}</strong>
-                    <span class="{badge_class}">{status_label}</span>
+            st.markdown(
+                f"""
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px; margin-bottom: 10px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <strong style="color:{cfg['color']};">{cfg['name'].split('—')[0]}</strong>
+                        <span class="{badge_class}">{status_label}</span>
+                    </div>
+                    <div style="font-size:0.75rem; color:#888; margin-bottom:8px;">
+                        Port: <code>{cfg['port']}</code> | Endpoint: <code>{cfg['url']}</code>
+                    </div>
                 </div>
-                <div style="font-size:0.75rem; color:#888; margin-bottom:8px;">
-                    Port: <code>{cfg['port']}</code> | Endpoint: <code>{cfg['url']}</code>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+                """,
+                unsafe_allow_html=True
+            )
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("▶️ Start", key=f"start_{key}", use_container_width=True, disabled=is_healthy):
-                with st.spinner(f"Starting {key}..."):
-                    ServiceManager.start_service(key)
-                    time.sleep(0.5)
-                    st.rerun()
-        with c2:
-            if st.button("⏹️ Stop", key=f"stop_{key}", use_container_width=True, disabled=not st_info["port_active"]):
-                with st.spinner(f"Stopping {key}..."):
-                    ServiceManager.stop_service(key)
-                    time.sleep(0.5)
-                    st.rerun()
-        with c3:
-            if st.button("🔄 Restart", key=f"restart_{key}", use_container_width=True):
-                with st.spinner(f"Restarting {key}..."):
-                    ServiceManager.restart_service(key)
-                    time.sleep(0.5)
-                    st.rerun()
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                if st.button("▶️ Start", key=f"start_{key}", use_container_width=True, disabled=is_healthy):
+                    with st.spinner(f"Starting {key}..."):
+                        ServiceManager.start_service(key)
+                        time.sleep(0.3)
+                        st.rerun()
+            with c2:
+                if st.button("⏹️ Stop", key=f"stop_{key}", use_container_width=True, disabled=not st_info["port_active"]):
+                    with st.spinner(f"Stopping {key}..."):
+                        ServiceManager.stop_service(key)
+                        time.sleep(0.3)
+                        st.rerun()
+            with c3:
+                if st.button("🔄 Restart", key=f"restart_{key}", use_container_width=True):
+                    with st.spinner(f"Restarting {key}..."):
+                        ServiceManager.restart_service(key)
+                        time.sleep(0.3)
+                        st.rerun()
 
-    st.markdown("---")
-    st.markdown("### ⚙️ System Config")
-    st.caption(f"🧠 **Model:** `{settings.openai_model}`")
-    st.caption(f"🎲 **Chaos Seed:** `{settings.chaos_seed}`")
-    st.caption(f"🛡️ **Chaos Active:** `{'Yes' if settings.chaos_enabled else 'No'}`")
+        st.markdown("---")
+        st.markdown("### ⚙️ System Config")
+        st.caption(f"🧠 **Model:** `{settings.openai_model}`")
+        st.caption(f"🎲 **Chaos Seed:** `{settings.chaos_seed}`")
+        st.caption(f"🛡️ **Chaos Active:** `{'Yes' if settings.chaos_enabled else 'No'}`")
+
+render_sidebar()
 
 
 # ==========================================
@@ -295,7 +338,6 @@ with tab_dash:
         # Detailed Runs Table
         st.markdown("### 📋 Evaluation Telemetry Records")
         if runs:
-            # Filter options
             c_f1, c_f2 = st.columns([1, 2])
             with c_f1:
                 verdict_filter = st.multiselect("Filter Verdicts:", options=list(df_runs["verdict"].unique()), default=[])
@@ -341,7 +383,6 @@ with tab_exec:
             progress_bar = st.progress(0, text="Initializing evaluation harness...")
             with st.spinner("Executing benchmark scenarios across Swarm pipeline..."):
                 try:
-                    # Run async harness
                     report = asyncio.run(run_evaluation_benchmark(run_count=bench_count, seed=bench_seed))
                     progress_bar.progress(100, text="Benchmark evaluation complete!")
                     st.success(f"Benchmark completed successfully! Overall Success Rate: {report['metrics']['success_rate_pct']}%")
@@ -374,6 +415,11 @@ with tab_exec:
         )
         source_input = st.selectbox("Log Source:", ["firewall_syslog", "auth_daemon", "cloudtrail", "user_report", "ids_suricata"])
 
+        # Check Service 1 status
+        s1_live = ServiceManager.get_service_status("triage")
+        if not s1_live["healthy"]:
+            st.warning("⚠️ **Service 1 (Triage Agent) is OFFLINE.** Ingesting will fail at the gateway and route the incident into the Dead-Letter Queue.")
+
         if st.button("⚡ Ingest & Process Log", use_container_width=True):
             with st.spinner("Processing through Swarm Pipeline..."):
                 item = RawStreamItem(
@@ -381,15 +427,10 @@ with tab_exec:
                     raw_text=raw_log_input,
                     run_id=f"manual_{datetime.now().strftime('%H%M%S')}"
                 )
-                from httpx import AsyncClient, ASGITransport
-                from shared.utilities.http import set_override_clients
-                from services.triage.app.main import app as triage_app
-                from services.resolution.app.main import app as resolution_app
 
                 async def _run_manual():
                     s1_status = ServiceManager.get_service_status("triage")
 
-                    # If Service 1 is running as live HTTP service
                     if s1_status["healthy"]:
                         import httpx
                         timeout_cfg = httpx.Timeout(30.0, connect=5.0)
@@ -438,15 +479,32 @@ with tab_exec:
                 try:
                     result = asyncio.run(_run_manual())
                     
-                    # Display Results Card
-                    v_color = "#00ff88" if result.get("verdict") in ["allow", "block_ip", "quarantine"] else ("#ff007a" if result.get("verdict") == "unresolved" else "#ffaa00")
+                    # Clean high-contrast result card
+                    verdict_val = result.get("verdict", "UNKNOWN").upper()
+                    if verdict_val in ["ALLOW"]:
+                        pill_class = "verdict-pill-allow"
+                    elif verdict_val in ["BLOCK_IP", "UNRESOLVED"]:
+                        pill_class = "verdict-pill-block"
+                    else:
+                        pill_class = "verdict-pill-warn"
+
                     st.markdown(
                         f"""
-                        <div class="soc-card" style="border-left: 5px solid {v_color};">
-                            <h3>Verdict: <span style="color:{v_color};">{result.get('verdict', 'UNKNOWN').upper()}</span></h3>
-                            <p><strong>Threat ID:</strong> <code>{result.get('threat_id')}</code> | <strong>Intent:</strong> <code>{result.get('intent')} ({result.get('intent_category')})</code></p>
-                            <p><strong>Reasoning:</strong> {result.get('reason')}</p>
-                            <p><strong>Latency:</strong> <code>{result.get('latency_ms')} ms</code> | <strong>Prompt Injection Defended:</strong> <code>{result.get('sanitization_flagged')}</code></p>
+                        <div class="result-card-clean">
+                            <h3>
+                                Security Verdict: 
+                                <span class="verdict-pill {pill_class}">{verdict_val}</span>
+                            </h3>
+                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+                                <div><strong>Threat ID:</strong> <code>{result.get('threat_id')}</code></div>
+                                <div><strong>Intent:</strong> <code>{result.get('intent')} ({result.get('intent_category')})</code></div>
+                                <div><strong>Processing Latency:</strong> <code>{result.get('latency_ms')} ms</code></div>
+                                <div><strong>Prompt Injection Defended:</strong> <code>{result.get('sanitization_flagged')}</code></div>
+                            </div>
+                            <div style="background:#f8fafc; padding:12px; border-radius:8px; border-left:4px solid #3b82f6;">
+                                <strong style="color:#1e293b;">Investigation Reasoning:</strong><br>
+                                <span style="color:#475569;">{result.get('reason')}</span>
+                            </div>
                         </div>
                         """,
                         unsafe_allow_html=True
@@ -474,7 +532,7 @@ with tab_unres:
         "Once **ALL required services are online**, click the **Replay & Resolve** button below to complete resolution."
     )
 
-    # Service Statuses
+    # Service Statuses (fast non-blocking probe)
     s1_status = ServiceManager.get_service_status("triage")
     s2_status = ServiceManager.get_service_status("resolution")
     all_services_online = (s1_status["healthy"] and s2_status["healthy"])
@@ -525,10 +583,10 @@ with tab_unres:
                     st.success(replay_summary["message"])
                 else:
                     st.warning(replay_summary["message"])
-                time.sleep(1)
+                time.sleep(0.5)
                 st.rerun()
     with btn_col2:
-        if st.button("🧹 Refresh Queue View", use_container_width=True):
+        if st.button("🧹 Fast Refresh Queue", use_container_width=True):
             st.rerun()
 
     # Unresolved Cases Data Table
@@ -560,38 +618,37 @@ with tab_rag:
     if q_c1.button("📊 What are our overall benchmark results?"):
         preset_query = "What are the overall benchmark results, success rates, and latency metrics?"
     if q_c2.button("⚠️ List all unresolved cases & why they failed"):
-        preset_query = "List all unresolved or incomplete cases and explain why they failed during Service 2 downtime."
+        preset_query = "List all unresolved or incomplete cases and explain why they failed during service downtime."
     if q_c3.button("🛡️ Show prompt injection defense cases"):
         preset_query = "Which cases had prompt injection attempts and how were they defended?"
 
-    # Display Chat Messages
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"], avatar="🛡️" if msg["role"] == "assistant" else "👤"):
-            st.markdown(msg["content"])
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    # Chat Input Box
+    # 📜 Dedicated Scrollable Chat Container (Keeps input box stickied below)
+    chat_container = st.container(height=480)
+
+    with chat_container:
+        for msg in st.session_state.chat_history:
+            with st.chat_message(msg["role"], avatar="🛡️" if msg["role"] == "assistant" else "👤"):
+                st.markdown(msg["content"])
+
+    # 📌 Chat Input Box (Anchored at the bottom)
     user_input = st.chat_input("Ask about benchmark results, unresolved cases, or threat analysis...")
     active_prompt = preset_query or user_input
 
     if active_prompt:
         # Add user message
         st.session_state.chat_history.append({"role": "user", "content": active_prompt})
-        with st.chat_message("user", avatar="👤"):
-            st.markdown(active_prompt)
 
         # Generate RAG response
-        with st.chat_message("assistant", avatar="🛡️"):
-            with st.spinner("Retrieving telemetry knowledge and generating answer..."):
-                rag_response = asyncio.run(st.session_state.rag_engine.answer_query(active_prompt))
-                answer = rag_response["answer"]
-                st.markdown(answer)
+        with st.spinner("Retrieving telemetry knowledge and generating answer..."):
+            rag_response = asyncio.run(st.session_state.rag_engine.answer_query(active_prompt))
+            answer = rag_response["answer"]
 
-                # Expandable sources
-                if rag_response.get("sources"):
-                    with st.expander("📚 Retrieved Knowledge Chunks & Sources"):
-                        for s in rag_response["sources"]:
-                            st.markdown(f"**[{s['doc_id']}] {s['title']}** ({s['doc_type']})")
-                            st.caption(s["content"])
-                            st.markdown("---")
+            # Append source block to answer
+            if rag_response.get("sources"):
+                source_titles = [f"• **[{s['doc_id']}]** {s['title']}" for s in rag_response["sources"][:3]]
+                answer += f"\n\n---\n**📚 Cited Knowledge Sources:**\n" + "\n".join(source_titles)
 
         st.session_state.chat_history.append({"role": "assistant", "content": answer})
+        st.rerun()

@@ -50,14 +50,14 @@ _processes: Dict[str, subprocess.Popen] = {}
 
 
 def is_port_in_use(port: int) -> bool:
-    """Checks if a TCP port is currently open and bound."""
+    """Fast non-blocking check if a TCP port is currently open and bound."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.5)
+        s.settimeout(0.05)
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
-def check_health(health_url: str, timeout: float = 1.0) -> bool:
-    """Performs HTTP GET check against /health endpoint."""
+def check_health(health_url: str, timeout: float = 0.15) -> bool:
+    """Fast HTTP GET check against /health endpoint."""
     try:
         with httpx.Client(timeout=timeout) as client:
             resp = client.get(health_url)
