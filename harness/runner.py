@@ -36,12 +36,13 @@ async def run_single_scenario(
             data = resp.json()
             actual_verdict = data.get("verdict", "unknown")
             
-            # Evaluate scenario success: verdict matches expected or handled gracefully
-            is_success = (actual_verdict == scenario.expected_verdict) or (
-                scenario.expected_verdict == "insufficient_context" and actual_verdict in ["insufficient_context", "unresolved"]
-            ) or (
-                actual_verdict in ["block_ip", "quarantine", "monitor"] and scenario.expected_verdict in ["block_ip", "quarantine"]
-            )
+            # Evaluate scenario success: UNRESOLVED is always a failure (requires replay)
+            if actual_verdict == "unresolved":
+                is_success = False
+            else:
+                is_success = (actual_verdict == scenario.expected_verdict) or (
+                    actual_verdict in ["block_ip", "quarantine", "monitor"] and scenario.expected_verdict in ["block_ip", "quarantine"]
+                )
 
             chaos_evs = data.get("chaos_events", [])
             if injected_prompt_chaos and "saboteur_prompt_injection" not in chaos_evs:
@@ -87,9 +88,20 @@ async def run_single_scenario(
                 "investigation_iterations": 0
             }
 
-async def run_evaluation_benchmark(run_count: int = 100, seed: int = 12345) -> Dict[str, Any]:
-    """Executes full automated evaluation benchmark across N scenarios concurrently."""
-    logger.info(f"Starting evaluation benchmark run (count={run_count}, seed={seed})")
+from typing import Dict, Any, List, Optional
+from ui.service_manager import ServiceManager
+
+async def run_evaluation_benchmark(
+    run_count: int = 100,
+    seed: int = 12345,
+    outage_at_scenario: Optional[int] = None,
+    outage_service: str = "resolution"
+) -> Dict[str, Any]:
+    """
+    Executes full automated evaluation benchmark across N scenarios concurrently.
+    Supports mid-stream chaos outage injection (e.g. stopping Service 2 at scenario #75).
+    """
+    logger.info(f"Starting evaluation benchmark run (count={run_count}, seed={seed}, outage_at={outage_at_scenario})")
     
     # Reset saboteur seed
     chaos_injector.reset_seed(seed)
@@ -99,20 +111,77 @@ async def run_evaluation_benchmark(run_count: int = 100, seed: int = 12345) -> D
     triage_transport = ASGITransport(app=triage_app)
     resolution_transport = ASGITransport(app=resolution_app)
 
-    async with AsyncClient(transport=triage_transport, base_url="http://localhost:8001") as triage_client:
-        async with AsyncClient(transport=resolution_transport, base_url="http://localhost:8002") as res_client:
-            set_override_clients(triage_client=triage_client, resolution_client=res_client)
-            try:
-                semaphore = asyncio.Semaphore(10) # 10 concurrent requests
-                tasks = [run_single_scenario(s, triage_client, semaphore) for s in scenarios]
-                results = await asyncio.gather(*tasks)
-            finally:
-                set_override_clients(triage_client=None, resolution_client=None)
+    results = []
+    orig_res_url = settings.resolution_url
+
+    try:
+        if outage_at_scenario and 1 < outage_at_scenario <= len(scenarios):
+            pre_count = outage_at_scenario - 1
+            pre_scenarios = scenarios[:pre_count]
+            post_scenarios = scenarios[pre_count:]
+
+            # Phase 1: Pre-outage runs (Service 2 online)
+            logger.info(f"Phase 1: Running {len(pre_scenarios)} scenarios with full swarm healthy...")
+            async with AsyncClient(transport=triage_transport, base_url="http://localhost:8001") as triage_client:
+                async with AsyncClient(transport=resolution_transport, base_url="http://localhost:8002") as res_client:
+                    set_override_clients(triage_client=triage_client, resolution_client=res_client)
+                    try:
+                        semaphore = asyncio.Semaphore(10)
+                        pre_tasks = [run_single_scenario(s, triage_client, semaphore) for s in pre_scenarios]
+                        pre_results = await asyncio.gather(*pre_tasks)
+                        results.extend(pre_results)
+                    finally:
+                        set_override_clients(triage_client=None, resolution_client=None)
+
+            # Phase 2: Trip outage at scenario #K
+            logger.warning(f"💥 CHAOS INJECTION: Mid-run outage injected at scenario #{outage_at_scenario}. Stopping {outage_service}!")
+            ServiceManager.stop_service(outage_service)
+            settings.resolution_url = "http://127.0.0.1:59999"  # Offline endpoint
+
+            # Phase 3: Post-outage runs (Service 2 offline -> DLQ queuing)
+            logger.info(f"Phase 2: Running remaining {len(post_scenarios)} scenarios during {outage_service} outage...")
+            async with AsyncClient(transport=triage_transport, base_url="http://localhost:8001") as triage_client:
+                set_override_clients(triage_client=triage_client, resolution_client=None)
+                try:
+                    semaphore = asyncio.Semaphore(5)  # reduced concurrency during outage retries
+                    post_tasks = [run_single_scenario(s, triage_client, semaphore) for s in post_scenarios]
+                    post_results = await asyncio.gather(*post_tasks)
+                    results.extend(post_results)
+                finally:
+                    set_override_clients(triage_client=None, resolution_client=None)
+
+        else:
+            # Standard all-online benchmark
+            async with AsyncClient(transport=triage_transport, base_url="http://localhost:8001") as triage_client:
+                async with AsyncClient(transport=resolution_transport, base_url="http://localhost:8002") as res_client:
+                    set_override_clients(triage_client=triage_client, resolution_client=res_client)
+                    try:
+                        semaphore = asyncio.Semaphore(10)
+                        tasks = [run_single_scenario(s, triage_client, semaphore) for s in scenarios]
+                        results = await asyncio.gather(*tasks)
+                    finally:
+                        set_override_clients(triage_client=None, resolution_client=None)
+
+    finally:
+        settings.resolution_url = orig_res_url
 
     # Sort results by run_id
     results = sorted(results, key=lambda x: x["run_id"])
 
     report = generate_evaluation_report(results, output_dir="reports")
+    
+    if outage_at_scenario:
+        unresolved_runs = [r for r in results if r.get("verdict") == "unresolved"]
+        report["outage_details"] = {
+            "outage_injected": True,
+            "outage_at_scenario": outage_at_scenario,
+            "outage_service": outage_service,
+            "pre_outage_count": outage_at_scenario - 1,
+            "post_outage_count": len(scenarios) - (outage_at_scenario - 1),
+            "unresolved_count": len(unresolved_runs),
+            "unresolved_runs": unresolved_runs
+        }
+
     logger.info(f"Evaluation benchmark completed. Overall success rate: {report['metrics']['success_rate_pct']}%")
     return report
 

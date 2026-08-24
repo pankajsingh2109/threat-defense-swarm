@@ -24,8 +24,14 @@ from shared.unresolved_queue import (
     get_unresolved_cases, get_queue_stats, add_unresolved_case, clear_unresolved_cases
 )
 from ui.service_manager import ServiceManager, SERVICES_CONFIG
+import harness.runner as hr
+importlib.reload(hr)
 from harness.runner import run_evaluation_benchmark
+import harness.replay as hrp
+importlib.reload(hrp)
 from harness.replay import replay_all_pending_cases
+import rag.engine as re_mod
+importlib.reload(re_mod)
 from rag.engine import SwarmRAGEngine
 
 # ==========================================
@@ -678,16 +684,18 @@ with tab_rag:
         st.markdown("Ask natural language questions about past evaluation runs, failed/unresolved cases, threat investigations, or live system state.")
 
         # Quick Suggestion & Action Chips
-        st.caption("Quick Actions & Queries:")
-        q_c1, q_c2, q_c3, q_c4 = st.columns(4)
+        st.caption("Quick Actions & Operational Scenarios:")
+        q_c1, q_c2, q_c3, q_c4, q_c5 = st.columns(5)
         preset_query = None
-        if q_c1.button("⚡ Start All & Replay Queue"):
+        if q_c1.button("⚡ Start All & Replay"):
             preset_query = "Please start all swarm services and then replay all pending unresolved cases."
-        if q_c2.button("📊 Benchmark Performance"):
+        if q_c2.button("💥 Chaos Outage Test"):
+            preset_query = "Flush telemetry records, then run a benchmark of 100 scenarios, and after 75 runs stop Service 2, then list all unresolved runs that we received due to Service 2 being down."
+        if q_c3.button("📊 Benchmark Metrics"):
             preset_query = "What are the overall benchmark results, success rates, and latency metrics?"
-        if q_c3.button("⚠️ Unresolved Incidents"):
+        if q_c4.button("⚠️ Unresolved Incidents"):
             preset_query = "List all unresolved or incomplete cases and explain why they failed during service downtime."
-        if q_c4.button("🧹 Flush Resolved Cases"):
+        if q_c5.button("🧹 Flush Resolved Cases"):
             preset_query = "Flush all resolved cases from the Dead-Letter Queue."
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -719,7 +727,8 @@ with tab_rag:
                         unsafe_allow_html=True
                     )
 
-                    rag_response = asyncio.run(st.session_state.rag_engine.answer_query(active_prompt))
+                    engine = SwarmRAGEngine()
+                    rag_response = asyncio.run(engine.answer_query(active_prompt))
                     answer = rag_response["answer"]
 
                     # Append source block
@@ -730,7 +739,12 @@ with tab_rag:
                     # Replace bubble with markdown answer
                     bubble_placeholder.markdown(answer)
 
-            # 3. Save assistant message without full-page refresh
+            # 3. Save assistant message
             st.session_state.chat_history.append({"role": "assistant", "content": answer})
+
+            # 4. If an operational action was executed, refresh UI so sidebar, metrics, and queues visually update
+            if rag_response.get("actions_executed"):
+                time.sleep(0.5)
+                st.rerun()
 
     render_rag_chat()

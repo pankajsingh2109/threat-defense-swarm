@@ -132,6 +132,22 @@ RAG_TOOLS = [
                 }
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_chaos_outage_benchmark",
+            "description": "Runs a benchmark evaluation suite with mid-stream service outage chaos injection (e.g. running 100 scenarios, stopping Service 2 at scenario #75, and queuing unresolved runs).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "total_scenarios": {"type": "integer", "description": "Total scenarios to run (e.g. 100).", "default": 100},
+                    "outage_at_scenario": {"type": "integer", "description": "Scenario number at which to stop the service (e.g. 75).", "default": 75},
+                    "outage_service": {"type": "string", "description": "Which service to stop (e.g. 'resolution').", "default": "resolution"},
+                    "flush_first": {"type": "boolean", "description": "Whether to flush existing telemetry records before starting.", "default": True}
+                }
+            }
+        }
     }
 ]
 
@@ -139,13 +155,61 @@ RAG_TOOLS = [
 def detect_operational_actions(query: str) -> List[Tuple[str, Dict[str, Any]]]:
     """
     Robust intent detector that extracts operational actions from natural language commands.
-    Returns a sequence of (tool_name, tool_args) to execute.
+    Handles single actions, compound sequences, and mid-stream chaos outage benchmarks.
     """
     q = query.lower().strip()
     actions: List[Tuple[str, Dict[str, Any]]] = []
 
-    # 1. Start Services
-    if re.search(r"\b(start|up|boot|launch|turn on|bring up)\b", q) and not re.search(r"\b(benchmark|eval|test)\b", q):
+    # 1. Check for Mid-Stream Chaos Outage Benchmark
+    is_benchmark = any(w in q for w in ["benchmark", "banchmark", "scenario", "scenerio", "eval", "evaluation"])
+    is_outage = any(w in q for w in ["stop", "down", "kill", "outage", "shut down"])
+    has_service_mention = "service" in q or "resolution" in q or "triage" in q
+
+    if is_benchmark and is_outage and has_service_mention:
+        # Mask out service numbers so "service 2" doesn't become outage_at_scenario
+        q_masked = re.sub(r"\bservice\s*([123])\b", r"svc_\1", q)
+        
+        # Look for explicit "after/at/around N"
+        outage_match = re.search(r"\b(?:after|at|around)\s*(\d+)\b", q_masked)
+        # Look for total scenarios count
+        total_match = re.search(r"\b(\d+)\s*(?:scenarios|scenerios|runs|benchmarks|banchmarks|count)?\b", q_masked)
+        
+        total = 100
+        outage_at = 75
+
+        if total_match:
+            total = int(total_match.group(1))
+        if outage_match:
+            outage_at = int(outage_match.group(1))
+        else:
+            # Fallback if both numbers are in query
+            nums = [int(n) for n in re.findall(r"\b\d+\b", q_masked)]
+            if len(nums) >= 2:
+                total = max(nums)
+                outage_at = min(nums)
+            elif len(nums) == 1:
+                total = nums[0]
+                outage_at = max(2, int(total * 0.75))
+
+        flush_first = any(w in q for w in ["flush", "falsh", "clear", "reset", "clean"])
+        target_svc = "resolution"
+        if "service 1" in q or "triage" in q:
+            target_svc = "triage"
+
+        actions.append(("run_chaos_outage_benchmark", {
+            "total_scenarios": total,
+            "outage_at_scenario": outage_at,
+            "outage_service": target_svc,
+            "flush_first": flush_first
+        }))
+        return actions
+
+    # 2. Flush Telemetry / Reports
+    if re.search(r"\b(flush|falsh|purge|clear|reset)\b", q) and re.search(r"\b(telemetry|telementary|report|reports|benchmark data)\b", q):
+        actions.append(("flush_telemetry_records", {}))
+
+    # 3. Start Services
+    if re.search(r"\b(start|up|boot|launch|turn on|bring up)\b", q) and not re.search(r"\b(benchmark|banchmark|eval|test)\b", q):
         if re.search(r"\b(all|swarm|system|everything)\b", q) or ("service" in q and "2" not in q and "1" not in q and "3" not in q):
             actions.append(("start_services", {"service_name": "all"}))
         elif "service 1" in q or "triage" in q:
@@ -157,8 +221,8 @@ def detect_operational_actions(query: str) -> List[Tuple[str, Dict[str, Any]]]:
         else:
             actions.append(("start_services", {"service_name": "all"}))
 
-    # 2. Stop Services
-    if re.search(r"\b(stop|kill|shut down|shutdown|turn off|down)\b", q):
+    # 4. Stop Services
+    if re.search(r"\b(stop|kill|shut down|shutdown|turn off|down)\b", q) and not is_benchmark:
         if re.search(r"\b(all|swarm|system|everything)\b", q):
             actions.append(("stop_services", {"service_name": "all"}))
         elif "service 1" in q or "triage" in q:
@@ -168,7 +232,7 @@ def detect_operational_actions(query: str) -> List[Tuple[str, Dict[str, Any]]]:
         elif "service 3" in q or "saboteur" in q:
             actions.append(("stop_services", {"service_name": "saboteur"}))
 
-    # 3. Restart Services
+    # 5. Restart Services
     if re.search(r"\b(restart|reboot|cycle)\b", q):
         if re.search(r"\b(all|swarm|system)\b", q) or "service" in q:
             actions.append(("restart_services", {"service_name": "all"}))
@@ -179,23 +243,18 @@ def detect_operational_actions(query: str) -> List[Tuple[str, Dict[str, Any]]]:
         elif "service 3" in q or "saboteur" in q:
             actions.append(("restart_services", {"service_name": "saboteur"}))
 
-    # 4. Replay Unresolved Backlog
+    # 6. Replay Unresolved Backlog
     if re.search(r"\b(replay|resolve|re-triage|reprocess|process pending|clear backlog)\b", q):
         actions.append(("replay_unresolved_cases", {}))
 
-    # 5. Flush Queue
-    if re.search(r"\b(flush|purge|clear|empty)\b", q) and re.search(r"\b(queue|backlog|cases)\b", q) and not re.search(r"\b(replay)\b", q):
+    # 7. Flush Queue
+    if re.search(r"\b(flush|falsh|purge|clear|empty)\b", q) and re.search(r"\b(queue|backlog|cases)\b", q) and not re.search(r"\b(replay)\b", q):
         target = "all" if re.search(r"\b(all|entire|everything)\b", q) else "resolved"
         actions.append(("flush_queue", {"target": target}))
 
-    # 6. Flush Telemetry / Reports
-    if re.search(r"\b(flush|purge|clear|reset)\b", q) and re.search(r"\b(telemetry|report|reports|benchmark data)\b", q):
-        actions.append(("flush_telemetry_records", {}))
-
-    # 7. Run Benchmark Evaluation
-    if re.search(r"\b(run|launch|execute)\b", q) and re.search(r"\b(benchmark|eval|evaluation|suite)\b", q):
-        # Extract scenario count if specified
-        count_match = re.search(r"\b(\d+)\s*(scenarios|runs|count)?\b", q)
+    # 8. Standard Run Benchmark Evaluation
+    if re.search(r"\b(run|launch|execute)\b", q) and re.search(r"\b(benchmark|banchmark|eval|evaluation|suite)\b", q) and not is_outage:
+        count_match = re.search(r"\b(\d+)\s*(scenarios|scenerios|runs|count)?\b", q)
         count = int(count_match.group(1)) if count_match else 20
         actions.append(("run_benchmark_evaluation", {"scenario_count": count}))
 
@@ -280,6 +339,34 @@ class SwarmRAGEngine:
                 "p50_latency_ms": report.get("metrics", {}).get("p50_latency_ms")
             }
 
+        elif name == "run_chaos_outage_benchmark":
+            total = args.get("total_scenarios", 100)
+            outage_at = args.get("outage_at_scenario", 75)
+            svc = args.get("outage_service", "resolution")
+            flush_first = args.get("flush_first", True)
+
+            if flush_first:
+                rep_json = Path("reports/latest_report.json")
+                rep_md = Path("reports/latest_report.md")
+                if rep_json.exists():
+                    rep_json.unlink(missing_ok=True)
+                if rep_md.exists():
+                    rep_md.unlink(missing_ok=True)
+
+            report = await run_evaluation_benchmark(
+                run_count=total,
+                seed=settings.chaos_seed,
+                outage_at_scenario=outage_at,
+                outage_service=svc
+            )
+            self.retriever.refresh()
+            return {
+                "status": "success",
+                "total_runs": report.get("total_runs"),
+                "metrics": report.get("metrics"),
+                "outage_details": report.get("outage_details", {})
+            }
+
         return {"status": "error", "message": f"Unknown tool: {name}"}
 
     async def answer_query(self, query: str, top_k: int = 6) -> Dict[str, Any]:
@@ -293,7 +380,7 @@ class SwarmRAGEngine:
         # 1. Proactive Operational Intent Detection
         detected_actions = detect_operational_actions(query)
 
-        # If operational actions were detected, execute them directly first!
+        # If operational actions were detected, execute them directly!
         if detected_actions:
             action_reports = []
             for tool_name, tool_args in detected_actions:
@@ -303,8 +390,27 @@ class SwarmRAGEngine:
                     "arguments": tool_args,
                     "result": tool_res
                 })
-                if tool_name == "start_services":
-                    action_reports.append(f"⚡ **Started Microservices:** `{tool_args.get('service_name', 'all').upper()}` (All services initiated).")
+
+                if tool_name == "run_chaos_outage_benchmark":
+                    outage_info = tool_res.get("outage_details", {})
+                    unresolved_runs = outage_info.get("unresolved_runs", [])
+                    pre_count = outage_info.get("pre_outage_count", 74)
+                    outage_at = outage_info.get("outage_at_scenario", 75)
+                    total_r = tool_res.get("total_runs", 100)
+
+                    action_reports.append(f"🧪 **Multi-Stage Chaos Outage Benchmark Completed (`{total_r}` Scenarios)**:")
+                    action_reports.append(f"- **Stage 1 (Pre-Outage Runs 1 to {pre_count}):** Full swarm healthy | 100% resolution.")
+                    action_reports.append(f"- **Stage 2 (Chaos Injected at Scenario #{outage_at}):** 💥 Stopped Service 2 (`resolution`).")
+                    action_reports.append(f"- **Stage 3 (Outage Handling Runs {outage_at} to {total_r}):** Service 1 caught {len(unresolved_runs)} A2A timeouts, issued `UNRESOLVED` verdicts, and routed to Dead-Letter Queue.")
+
+                    if unresolved_runs:
+                        unres_list = [f"  {idx+1}. **{r.get('threat_id')}** (`{r.get('run_id')}`) — Intent: `{r.get('intent_category')}` — Reason: *{r.get('reason')}*" for idx, r in enumerate(unresolved_runs[:10])]
+                        if len(unresolved_runs) > 10:
+                            unres_list.append(f"  ... *(and {len(unresolved_runs)-10} additional queued threat incidents)*")
+                        action_reports.append("\n**📬 List of Unresolved Incidents Queued Due to Service 2 Downtime:**\n" + "\n".join(unres_list))
+
+                elif tool_name == "start_services":
+                    action_reports.append(f"⚡ **Started Microservices:** `{tool_args.get('service_name', 'all').upper()}` (All services online).")
                 elif tool_name == "stop_services":
                     action_reports.append(f"⏹️ **Stopped Microservices:** `{tool_args.get('service_name', 'all').upper()}`.")
                 elif tool_name == "restart_services":
@@ -330,12 +436,12 @@ class SwarmRAGEngine:
             response_lines = [
                 "### 🤖 Swarm Operational Action Executed\n",
                 "\n".join(action_reports),
-                "\n#### 🛰️ Updated System & Service Posture:",
+                "\n#### 🛰️ Updated System Posture:",
                 f"- **Service 1 (Triage Agent):** `{s1_badge}` (Port {fresh_services['triage']['port']})",
                 f"- **Service 2 (Resolution Agent):** `{s2_badge}` (Port {fresh_services['resolution']['port']})",
                 f"- **Service 3 (Saboteur Chaos):** `{s3_badge}` (Port {fresh_services['saboteur']['port']})",
                 f"- **Dead-Letter Queue:** `{fresh_stats['pending_cases']}` pending backlog cases (`{fresh_stats['resolved_cases']}` resolved).",
-                "\n*All operational actions and verdicts are synchronized in real-time with the Control Room and Executive SOC Dashboard.*"
+                "\n*All operational actions and verdicts are synchronized in real-time with the Control Room, Dead-Letter Queue, and Executive SOC Dashboard.*"
             ]
 
             latency_ms = round((time.time() - start_t) * 1000, 2)

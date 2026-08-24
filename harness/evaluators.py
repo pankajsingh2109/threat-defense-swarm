@@ -45,7 +45,7 @@ def generate_evaluation_report(run_results: List[Dict[str, Any]], output_dir: st
     clarification_success = sum(1 for r in clarification_runs if r.get("success", False))
     clarification_success_rate = (clarification_success / len(clarification_runs) * 100.0) if clarification_runs else 100.0
 
-    unresolved_count = sum(1 for r in run_results if r.get("verdict") in ["insufficient_context", "unresolved"])
+    unresolved_count = sum(1 for r in run_results if r.get("verdict") == "unresolved")
     unresolved_rate = (unresolved_count / total_runs * 100.0) if total_runs > 0 else 0.0
 
     report_summary = {
