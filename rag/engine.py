@@ -343,7 +343,7 @@ class SwarmRAGEngine:
             total = args.get("total_scenarios", 100)
             outage_at = args.get("outage_at_scenario", 75)
             svc = args.get("outage_service", "resolution")
-            flush_first = args.get("flush_first", True)
+            flush_first = args.get("flush_first", False)
 
             if flush_first:
                 rep_json = Path("reports/latest_report.json")
@@ -352,6 +352,10 @@ class SwarmRAGEngine:
                     rep_json.unlink(missing_ok=True)
                 if rep_md.exists():
                     rep_md.unlink(missing_ok=True)
+
+            # Ensure all microservices are online for Phase 1
+            ServiceManager.start_all_services()
+            await asyncio.sleep(0.5)
 
             report = await run_evaluation_benchmark(
                 run_count=total,
