@@ -387,41 +387,57 @@ with tab_exec:
                 from services.resolution.app.main import app as resolution_app
 
                 async def _run_manual():
-                    # Check if live HTTP service is up
-                    if ServiceManager.get_service_status("triage")["healthy"]:
+                    s1_status = ServiceManager.get_service_status("triage")
+                    s2_status = ServiceManager.get_service_status("resolution")
+
+                    # If Service 1 is running as live HTTP service
+                    if s1_status["healthy"]:
                         import httpx
-                        async with httpx.AsyncClient(timeout=10.0) as client:
+                        timeout_cfg = httpx.Timeout(30.0, connect=5.0)
+                        async with httpx.AsyncClient(timeout=timeout_cfg) as client:
                             resp = await client.post(f"{settings.triage_url}/ingest", json=item.model_dump())
                             return resp.json()
                     else:
+                        # In-process execution fallback
                         triage_transport = ASGITransport(app=triage_app)
-                        resolution_transport = ASGITransport(app=resolution_app)
                         async with AsyncClient(transport=triage_transport, base_url="http://localhost:8001") as triage_client:
-                            async with AsyncClient(transport=resolution_transport, base_url="http://localhost:8002") as res_client:
-                                set_override_clients(triage_client=triage_client, resolution_client=res_client)
+                            if s2_status["healthy"]:
+                                resolution_transport = ASGITransport(app=resolution_app)
+                                async with AsyncClient(transport=resolution_transport, base_url="http://localhost:8002") as res_client:
+                                    set_override_clients(triage_client=triage_client, resolution_client=res_client)
+                                    try:
+                                        resp = await triage_client.post("/ingest", json=item.model_dump())
+                                        return resp.json()
+                                    finally:
+                                        set_override_clients(triage_client=None, resolution_client=None)
+                            else:
+                                set_override_clients(triage_client=triage_client, resolution_client=None)
                                 try:
                                     resp = await triage_client.post("/ingest", json=item.model_dump())
                                     return resp.json()
                                 finally:
                                     set_override_clients(triage_client=None, resolution_client=None)
 
-                result = asyncio.run(_run_manual())
-                
-                # Display Results Card
-                v_color = "#00ff88" if result.get("verdict") in ["allow", "block_ip", "quarantine"] else ("#ff007a" if result.get("verdict") == "unresolved" else "#ffaa00")
-                st.markdown(
-                    f"""
-                    <div class="soc-card" style="border-left: 5px solid {v_color};">
-                        <h3>Verdict: <span style="color:{v_color};">{result.get('verdict', 'UNKNOWN').upper()}</span></h3>
-                        <p><strong>Threat ID:</strong> <code>{result.get('threat_id')}</code> | <strong>Intent:</strong> <code>{result.get('intent')} ({result.get('intent_category')})</code></p>
-                        <p><strong>Reasoning:</strong> {result.get('reason')}</p>
-                        <p><strong>Latency:</strong> <code>{result.get('latency_ms')} ms</code> | <strong>Prompt Injection Defended:</strong> <code>{result.get('sanitization_flagged')}</code></p>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-                if result.get("verdict") == "unresolved":
-                    st.warning("⚠️ This event was marked UNRESOLVED (e.g. Service 2 downtime). It has been added to the Dead-Letter Queue for replay.")
+                try:
+                    result = asyncio.run(_run_manual())
+                    
+                    # Display Results Card
+                    v_color = "#00ff88" if result.get("verdict") in ["allow", "block_ip", "quarantine"] else ("#ff007a" if result.get("verdict") == "unresolved" else "#ffaa00")
+                    st.markdown(
+                        f"""
+                        <div class="soc-card" style="border-left: 5px solid {v_color};">
+                            <h3>Verdict: <span style="color:{v_color};">{result.get('verdict', 'UNKNOWN').upper()}</span></h3>
+                            <p><strong>Threat ID:</strong> <code>{result.get('threat_id')}</code> | <strong>Intent:</strong> <code>{result.get('intent')} ({result.get('intent_category')})</code></p>
+                            <p><strong>Reasoning:</strong> {result.get('reason')}</p>
+                            <p><strong>Latency:</strong> <code>{result.get('latency_ms')} ms</code> | <strong>Prompt Injection Defended:</strong> <code>{result.get('sanitization_flagged')}</code></p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                    if result.get("verdict") == "unresolved":
+                        st.warning("⚠️ This event was marked UNRESOLVED (e.g. Service 2 downtime). It has been safely added to the Dead-Letter Queue for replay.")
+                except Exception as e:
+                    st.error(f"❌ Error during event ingestion: {e}")
 
 
 # ==========================================
