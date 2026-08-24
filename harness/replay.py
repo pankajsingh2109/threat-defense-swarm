@@ -124,8 +124,9 @@ async def replay_all_pending_cases(
         logger.info(f"Replaying {len(pending_cases)} pending cases via live HTTP microservices...")
         tasks = [replay_single_case(case, triage_client=None) for case in pending_cases]
         results = await asyncio.gather(*tasks)
-    elif use_inprocess_fallback:
-        logger.info(f"Replaying {len(pending_cases)} pending cases via in-process ASGI transports...")
+    elif use_inprocess_fallback and not s1_healthy and not s2_healthy:
+        # Standalone test environment only (when both HTTP servers are deliberately unstarted)
+        logger.info(f"Replaying {len(pending_cases)} pending cases via standalone test in-process ASGI transports...")
         triage_transport = ASGITransport(app=triage_app)
         resolution_transport = ASGITransport(app=resolution_app)
         async with AsyncClient(transport=triage_transport, base_url="http://localhost:8001") as triage_client:
@@ -137,13 +138,14 @@ async def replay_all_pending_cases(
                 finally:
                     set_override_clients(triage_client=None, resolution_client=None)
     else:
+        logger.warning("Replay rejected: Service 2 (Resolution Agent) is OFFLINE.")
         return {
             "total_pending": len(pending_cases),
             "replayed": 0,
             "resolved": 0,
             "still_pending": len(pending_cases),
             "results": [],
-            "message": "Services are offline. Start Service 1 and Service 2 before replaying."
+            "message": "⚠️ Cannot replay: Service 2 (Resolution Agent) is OFFLINE. Please start Service 2 in the Control Room first."
         }
 
     resolved_count = sum(1 for r in results if r.get("status") == "resolved")

@@ -458,6 +458,9 @@ with tab_unres:
     )
 
     # Queue Metrics
+    s2_status = ServiceManager.get_service_status("resolution")
+    can_replay = (q_stats["pending_cases"] > 0 and s2_status["healthy"])
+
     qc1, qc2, qc3, qc4 = st.columns(4)
     with qc1:
         st.metric("Total Logged in Queue", q_stats["total_cases"])
@@ -466,18 +469,25 @@ with tab_unres:
     with qc3:
         st.metric("✅ Successfully Resolved", q_stats["resolved_cases"])
     with qc4:
-        s2_status = ServiceManager.get_service_status("resolution")
         st.metric("Service 2 Status", s2_status["status"], delta="Ready to Replay" if s2_status["healthy"] else "Offline", delta_color="normal" if s2_status["healthy"] else "inverse")
+
+    if q_stats["pending_cases"] > 0 and not s2_status["healthy"]:
+        st.warning("⚠️ **Service 2 is currently OFFLINE.** Start Service 2 in the sidebar Control Room before clicking Replay.")
+    elif q_stats["pending_cases"] > 0 and s2_status["healthy"]:
+        st.success("🟢 **Service 2 is ONLINE.** Ready to replay pending unresolved cases.")
 
     st.markdown("---")
 
     # Action Controls
     btn_col1, btn_col2 = st.columns([2, 1])
     with btn_col1:
-        if st.button("🔄 Replay & Resolve All Pending Cases", type="primary", use_container_width=True, disabled=q_stats["pending_cases"] == 0):
-            with st.spinner("Replaying pending unresolved cases through Resolution Agent..."):
-                replay_summary = asyncio.run(replay_all_pending_cases(use_inprocess_fallback=True))
-                st.success(replay_summary["message"])
+        if st.button("🔄 Replay & Resolve All Pending Cases", type="primary", use_container_width=True, disabled=not can_replay):
+            with st.spinner("Replaying pending unresolved cases through live Resolution Agent..."):
+                replay_summary = asyncio.run(replay_all_pending_cases(use_inprocess_fallback=False))
+                if replay_summary.get("resolved", 0) > 0:
+                    st.success(replay_summary["message"])
+                else:
+                    st.warning(replay_summary["message"])
                 time.sleep(1)
                 st.rerun()
     with btn_col2:
