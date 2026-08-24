@@ -9,6 +9,7 @@ from shared.schemas.a2a import (
     A2AEnvelope, A2AContext, ClarificationRequest, ClarificationResponse, MessageType
 )
 from shared.resilience import execute_with_retry
+from shared.unresolved_queue import add_unresolved_case
 from shared.utilities.http import get_resolution_client
 from services.triage.app.sanitizer import sanitize_input
 from services.triage.app.classifier import classify_intent, compress_context
@@ -128,7 +129,23 @@ async def ingest_event(item: RawStreamItem):
         return response_data
     except Exception as e:
         latency_ms = (time.time() - start_time) * 1000
+        fail_msg = f"A2A Communication failure: {e}"
         logger.error(f"Failed to communicate with Resolution Agent after retries: {e}", extra={"threat_id": threat_id})
+        
+        # Save to Dead-Letter Queue for deferred resolution
+        add_unresolved_case(
+            run_id=item.run_id,
+            threat_id=threat_id,
+            raw_text=item.raw_text,
+            source=item.source,
+            sanitization_flagged=sanitized.injection_flagged,
+            flag_reason=sanitized.flag_reason,
+            intent=classification.intent.value,
+            intent_category=classification.category,
+            intent_confidence=classification.confidence,
+            failure_reason=fail_msg
+        )
+
         return {
             "run_id": item.run_id,
             "threat_id": threat_id,
@@ -140,7 +157,7 @@ async def ingest_event(item: RawStreamItem):
             "intent_category": classification.category,
             "intent_confidence": classification.confidence,
             "verdict": Verdict.UNRESOLVED.value,
-            "reason": f"A2A Communication failure: {e}",
+            "reason": fail_msg,
             "confidence": 0.0,
             "latency_ms": round(latency_ms, 2),
             "chaos_events": ["a2a_packet_dropped_retried"],
