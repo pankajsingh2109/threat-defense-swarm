@@ -18,6 +18,9 @@ STRICT INSTRUCTION HIERARCHY:
 
 Classify whether the raw input represents a cybersecurity THREAT or BENIGN NOISE.
 Categories include: brute_force_login, malicious_ip, authentication_burst, benign_activity, noise.
+
+CRITICAL INSTRUCTION FOR CLASSIFICATION:
+If an event is a security warning but lacks key metadata (like IP), classify it as THREAT (category: incomplete_telemetry) so the clarification loop can request the missing context.
 """
 
 def mock_classify_intent(raw_text: str) -> IntentClassification:
