@@ -138,14 +138,20 @@ async def replay_all_pending_cases(
                 finally:
                     set_override_clients(triage_client=None, resolution_client=None)
     else:
-        logger.warning("Replay rejected: Service 2 (Resolution Agent) is OFFLINE.")
+        offline_list = []
+        if not s1_healthy:
+            offline_list.append("Service 1 (Triage Agent)")
+        if not s2_healthy:
+            offline_list.append("Service 2 (Resolution Agent)")
+        
+        logger.warning(f"Replay rejected: Services offline: {', '.join(offline_list)}")
         return {
             "total_pending": len(pending_cases),
             "replayed": 0,
             "resolved": 0,
             "still_pending": len(pending_cases),
             "results": [],
-            "message": "⚠️ Cannot replay: Service 2 (Resolution Agent) is OFFLINE. Please start Service 2 in the Control Room first."
+            "message": f"⚠️ Cannot replay: The following services are OFFLINE: {', '.join(offline_list)}. Start all services in the Control Room first."
         }
 
     resolved_count = sum(1 for r in results if r.get("status") == "resolved")

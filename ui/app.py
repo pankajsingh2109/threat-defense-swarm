@@ -468,30 +468,50 @@ with tab_unres:
 
     # Informational Alert Banner
     st.info(
-        "💡 **How Swarm Handles Service 2 Downtime:**\n\n"
-        "When **Service 2 (Resolution Agent)** is stopped or temporarily offline, Service 1 (Triage Agent) performs exponential backoff retries. "
-        "Upon exhaustion, it marks the incident as **`UNRESOLVED`** and routes it to the **Dead-Letter Queue (`data/unresolved_cases.json`)**. "
-        "Once Service 2 is online, use the **Replay & Resolve** button below to complete resolution."
+        "💡 **How Swarm Handles Service Downtime:**\n\n"
+        "When **Service 1 (Triage Gateway)** or **Service 2 (Resolution Agent)** is stopped or unreachable, "
+        "incidents that cannot be fully processed are safely captured into the **Dead-Letter Queue (`data/unresolved_cases.json`)**. "
+        "Once **ALL required services are online**, click the **Replay & Resolve** button below to complete resolution."
     )
 
-    # Queue Metrics
+    # Service Statuses
+    s1_status = ServiceManager.get_service_status("triage")
     s2_status = ServiceManager.get_service_status("resolution")
-    can_replay = (q_stats["pending_cases"] > 0 and s2_status["healthy"])
+    all_services_online = (s1_status["healthy"] and s2_status["healthy"])
+    can_replay = (q_stats["pending_cases"] > 0 and all_services_online)
 
+    # Queue Metrics
     qc1, qc2, qc3, qc4 = st.columns(4)
     with qc1:
         st.metric("Total Logged in Queue", q_stats["total_cases"])
     with qc2:
-        st.metric("⏳ Pending Resolution", q_stats["pending_cases"], delta="Waiting for Service 2" if q_stats["pending_cases"] > 0 else "Clear")
+        st.metric("⏳ Pending Resolution", q_stats["pending_cases"], delta="Waiting for Recovery" if q_stats["pending_cases"] > 0 else "Clear")
     with qc3:
         st.metric("✅ Successfully Resolved", q_stats["resolved_cases"])
     with qc4:
-        st.metric("Service 2 Status", s2_status["status"], delta="Ready to Replay" if s2_status["healthy"] else "Offline", delta_color="normal" if s2_status["healthy"] else "inverse")
+        readiness_label = "🟢 ALL READY" if all_services_online else "🔴 DEGRADED"
+        st.metric("Swarm Readiness", readiness_label, delta="S1 & S2 Online" if all_services_online else "Services Offline", delta_color="normal" if all_services_online else "inverse")
 
-    if q_stats["pending_cases"] > 0 and not s2_status["healthy"]:
-        st.warning("⚠️ **Service 2 is currently OFFLINE.** Start Service 2 in the sidebar Control Room before clicking Replay.")
-    elif q_stats["pending_cases"] > 0 and s2_status["healthy"]:
-        st.success("🟢 **Service 2 is ONLINE.** Ready to replay pending unresolved cases.")
+    # Service Health Status Chips
+    c_s1, c_s2 = st.columns(2)
+    with c_s1:
+        s1_badge = "🟢 ONLINE" if s1_status["healthy"] else "🔴 OFFLINE"
+        st.caption(f"**Service 1 (Triage Agent):** `{s1_badge}` (Port {s1_status['port']})")
+    with c_s2:
+        s2_badge = "🟢 ONLINE" if s2_status["healthy"] else "🔴 OFFLINE"
+        st.caption(f"**Service 2 (Resolution Agent):** `{s2_badge}` (Port {s2_status['port']})")
+
+    # Health Guidance Banner
+    offline_services = []
+    if not s1_status["healthy"]:
+        offline_services.append("Service 1 (Triage Agent)")
+    if not s2_status["healthy"]:
+        offline_services.append("Service 2 (Resolution Agent)")
+
+    if q_stats["pending_cases"] > 0 and not all_services_online:
+        st.warning(f"⚠️ **Cannot replay yet.** The following required services are OFFLINE: **{', '.join(offline_services)}**. Please start them in the sidebar Control Room before clicking Replay.")
+    elif q_stats["pending_cases"] > 0 and all_services_online:
+        st.success("🟢 **All swarm services (Triage & Resolution) are ONLINE.** Ready to replay pending unresolved cases.")
 
     st.markdown("---")
 
