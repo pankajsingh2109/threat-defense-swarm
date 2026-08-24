@@ -17,7 +17,7 @@ import streamlit as st
 
 from shared.config import settings
 from shared.schemas.events import RawStreamItem, Verdict
-from shared.unresolved_queue import get_unresolved_cases, get_queue_stats
+from shared.unresolved_queue import get_unresolved_cases, get_queue_stats, add_unresolved_case
 from ui.service_manager import ServiceManager, SERVICES_CONFIG
 from harness.runner import run_evaluation_benchmark, run_single_scenario
 from harness.replay import replay_all_pending_cases
@@ -388,7 +388,6 @@ with tab_exec:
 
                 async def _run_manual():
                     s1_status = ServiceManager.get_service_status("triage")
-                    s2_status = ServiceManager.get_service_status("resolution")
 
                     # If Service 1 is running as live HTTP service
                     if s1_status["healthy"]:
@@ -398,25 +397,43 @@ with tab_exec:
                             resp = await client.post(f"{settings.triage_url}/ingest", json=item.model_dump())
                             return resp.json()
                     else:
-                        # In-process execution fallback
-                        triage_transport = ASGITransport(app=triage_app)
-                        async with AsyncClient(transport=triage_transport, base_url="http://localhost:8001") as triage_client:
-                            if s2_status["healthy"]:
-                                resolution_transport = ASGITransport(app=resolution_app)
-                                async with AsyncClient(transport=resolution_transport, base_url="http://localhost:8002") as res_client:
-                                    set_override_clients(triage_client=triage_client, resolution_client=res_client)
-                                    try:
-                                        resp = await triage_client.post("/ingest", json=item.model_dump())
-                                        return resp.json()
-                                    finally:
-                                        set_override_clients(triage_client=None, resolution_client=None)
-                            else:
-                                set_override_clients(triage_client=triage_client, resolution_client=None)
-                                try:
-                                    resp = await triage_client.post("/ingest", json=item.model_dump())
-                                    return resp.json()
-                                finally:
-                                    set_override_clients(triage_client=None, resolution_client=None)
+                        # Service 1 is OFFLINE: Ingestion gateway down -> mark UNRESOLVED and queue
+                        import uuid
+                        threat_id = f"threat-{uuid.uuid4().hex[:8]}"
+                        fail_reason = "Ingestion gateway failure: Service 1 (Triage Agent) is OFFLINE on port 8001."
+                        
+                        add_unresolved_case(
+                            run_id=item.run_id,
+                            threat_id=threat_id,
+                            raw_text=item.raw_text,
+                            source=item.source,
+                            sanitization_flagged=False,
+                            flag_reason=None,
+                            intent="unresolved",
+                            intent_category="gateway_offline",
+                            intent_confidence=0.0,
+                            failure_reason=fail_reason
+                        )
+
+                        return {
+                            "run_id": item.run_id,
+                            "threat_id": threat_id,
+                            "source": item.source,
+                            "raw_text": item.raw_text,
+                            "sanitization_flagged": False,
+                            "flag_reason": None,
+                            "intent": "unresolved",
+                            "intent_category": "gateway_offline",
+                            "intent_confidence": 0.0,
+                            "verdict": Verdict.UNRESOLVED.value,
+                            "reason": fail_reason,
+                            "confidence": 0.0,
+                            "latency_ms": 1.0,
+                            "chaos_events": ["service_1_gateway_offline"],
+                            "clarification_attempts": 0,
+                            "investigation_iterations": 0,
+                            "success": False
+                        }
 
                 try:
                     result = asyncio.run(_run_manual())
@@ -435,7 +452,7 @@ with tab_exec:
                         unsafe_allow_html=True
                     )
                     if result.get("verdict") == "unresolved":
-                        st.warning("⚠️ This event was marked UNRESOLVED (e.g. Service 2 downtime). It has been safely added to the Dead-Letter Queue for replay.")
+                        st.warning("⚠️ This event was marked UNRESOLVED (service downtime). It has been safely added to the Dead-Letter Queue for replay.")
                 except Exception as e:
                     st.error(f"❌ Error during event ingestion: {e}")
 
