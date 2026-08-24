@@ -69,6 +69,23 @@ RAW STREAM ITEM
 
 ---
 
+## 🖥️ Streamlit SOC Dashboard & Control Room
+
+Launch the unified SOC control room with interactive metrics, microservice lifecycle controls, dead-letter queue replayer, and RAG incident assistant:
+
+```powershell
+.\.venv\Scripts\streamlit run ui/app.py
+```
+
+### Key UI Features:
+1. **🎛️ Swarm Control Room (Sidebar)**: Real-time health monitoring and one-click Start/Stop/Restart controls for Service 1 (Triage), Service 2 (Resolution), and Service 3 (Saboteur).
+2. **📊 Executive SOC Dashboard**: Interactive telemetry cards, Plotly verdict donut charts, and latency percentiles (P50/P95/P99).
+3. **🚀 Swarm Execution Center**: Trigger multi-scenario evaluation benchmarks or test custom raw security logs in real-time.
+4. **🔄 Dead-Letter Queue & Replay Engine**: Tracks unresolved cases when Service 2 is down and offers one-click deferred re-triage once Service 2 is online.
+5. **🤖 RAG Cybersecurity Assistant**: Natural-language conversational AI assistant that retrieves past run reports, unresolved backlogs, and architecture docs.
+
+---
+
 ## 🛠️ Getting Started
 
 ### 1. Prerequisites
@@ -98,14 +115,13 @@ Run full Pytest suite across unit, integration, chaos, and end-to-end tests:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-### 5. Running 100-Run Evaluation Benchmark
-Execute the automated evaluation harness:
+### 5. Running Evaluation Benchmark (CLI)
+Execute the automated evaluation harness directly:
 ```powershell
 .\.venv\Scripts\python.exe harness/runner.py
 ```
-Reports will be written to `reports/latest_report.json` and `reports/latest_report.md`.
 
-### 6. Running with Docker Compose
-```bash
-docker-compose up --build
+### 6. Launching Streamlit UI
+```powershell
+.\.venv\Scripts\streamlit run ui/app.py
 ```
