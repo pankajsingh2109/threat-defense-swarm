@@ -38,7 +38,8 @@ async def handle_clarification_loop(
             if override_client is not None:
                 resp = await override_client.post(f"{settings.triage_url}/a2a/clarify", json=req.model_dump())
             else:
-                async with httpx.AsyncClient(timeout=0.1) as client:
+                timeout_cfg = httpx.Timeout(2.0, connect=0.5)
+                async with httpx.AsyncClient(timeout=timeout_cfg) as client:
                     resp = await client.post(f"{settings.triage_url}/a2a/clarify", json=req.model_dump())
 
             if resp.status_code == 200:

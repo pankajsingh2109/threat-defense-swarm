@@ -50,7 +50,8 @@ async def replay_single_case(
             resp = await triage_client.post("/ingest", json=item.model_dump())
             result = resp.json()
         else:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            timeout_cfg = httpx.Timeout(30.0, connect=2.0)
+            async with httpx.AsyncClient(timeout=timeout_cfg) as client:
                 resp = await client.post(f"{settings.triage_url}/ingest", json=item.model_dump())
                 result = resp.json()
 

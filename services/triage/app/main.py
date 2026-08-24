@@ -101,7 +101,8 @@ async def ingest_event(item: RawStreamItem):
                 raise HTTPException(status_code=resp.status_code, detail=f"Service 2 error: {resp.text}")
             return resp.json()
         else:
-            async with httpx.AsyncClient(timeout=2.0) as client:
+            timeout_cfg = httpx.Timeout(15.0, connect=1.0)
+            async with httpx.AsyncClient(timeout=timeout_cfg) as client:
                 resp = await client.post(resolution_endpoint, json=envelope.model_dump())
                 if resp.status_code != 200:
                     raise HTTPException(status_code=resp.status_code, detail=f"Service 2 error: {resp.text}")
