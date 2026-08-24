@@ -1,8 +1,9 @@
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from openai import AsyncOpenAI
 
 from shared.config import settings
@@ -135,6 +136,72 @@ RAG_TOOLS = [
 ]
 
 
+def detect_operational_actions(query: str) -> List[Tuple[str, Dict[str, Any]]]:
+    """
+    Robust intent detector that extracts operational actions from natural language commands.
+    Returns a sequence of (tool_name, tool_args) to execute.
+    """
+    q = query.lower().strip()
+    actions: List[Tuple[str, Dict[str, Any]]] = []
+
+    # 1. Start Services
+    if re.search(r"\b(start|up|boot|launch|turn on|bring up)\b", q) and not re.search(r"\b(benchmark|eval|test)\b", q):
+        if re.search(r"\b(all|swarm|system|everything)\b", q) or ("service" in q and "2" not in q and "1" not in q and "3" not in q):
+            actions.append(("start_services", {"service_name": "all"}))
+        elif "service 1" in q or "triage" in q:
+            actions.append(("start_services", {"service_name": "triage"}))
+        elif "service 2" in q or "resolution" in q:
+            actions.append(("start_services", {"service_name": "resolution"}))
+        elif "service 3" in q or "saboteur" in q:
+            actions.append(("start_services", {"service_name": "saboteur"}))
+        else:
+            actions.append(("start_services", {"service_name": "all"}))
+
+    # 2. Stop Services
+    if re.search(r"\b(stop|kill|shut down|shutdown|turn off|down)\b", q):
+        if re.search(r"\b(all|swarm|system|everything)\b", q):
+            actions.append(("stop_services", {"service_name": "all"}))
+        elif "service 1" in q or "triage" in q:
+            actions.append(("stop_services", {"service_name": "triage"}))
+        elif "service 2" in q or "resolution" in q:
+            actions.append(("stop_services", {"service_name": "resolution"}))
+        elif "service 3" in q or "saboteur" in q:
+            actions.append(("stop_services", {"service_name": "saboteur"}))
+
+    # 3. Restart Services
+    if re.search(r"\b(restart|reboot|cycle)\b", q):
+        if re.search(r"\b(all|swarm|system)\b", q) or "service" in q:
+            actions.append(("restart_services", {"service_name": "all"}))
+        elif "service 1" in q or "triage" in q:
+            actions.append(("restart_services", {"service_name": "triage"}))
+        elif "service 2" in q or "resolution" in q:
+            actions.append(("restart_services", {"service_name": "resolution"}))
+        elif "service 3" in q or "saboteur" in q:
+            actions.append(("restart_services", {"service_name": "saboteur"}))
+
+    # 4. Replay Unresolved Backlog
+    if re.search(r"\b(replay|resolve|re-triage|reprocess|process pending|clear backlog)\b", q):
+        actions.append(("replay_unresolved_cases", {}))
+
+    # 5. Flush Queue
+    if re.search(r"\b(flush|purge|clear|empty)\b", q) and re.search(r"\b(queue|backlog|cases)\b", q) and not re.search(r"\b(replay)\b", q):
+        target = "all" if re.search(r"\b(all|entire|everything)\b", q) else "resolved"
+        actions.append(("flush_queue", {"target": target}))
+
+    # 6. Flush Telemetry / Reports
+    if re.search(r"\b(flush|purge|clear|reset)\b", q) and re.search(r"\b(telemetry|report|reports|benchmark data)\b", q):
+        actions.append(("flush_telemetry_records", {}))
+
+    # 7. Run Benchmark Evaluation
+    if re.search(r"\b(run|launch|execute)\b", q) and re.search(r"\b(benchmark|eval|evaluation|suite)\b", q):
+        # Extract scenario count if specified
+        count_match = re.search(r"\b(\d+)\s*(scenarios|runs|count)?\b", q)
+        count = int(count_match.group(1)) if count_match else 20
+        actions.append(("run_benchmark_evaluation", {"scenario_count": count}))
+
+    return actions
+
+
 class SwarmRAGEngine:
     """Agentic Retrieval-Augmented Generation (RAG) incident intelligence and operational action engine."""
 
@@ -153,11 +220,11 @@ class SwarmRAGEngine:
             if svc == "all":
                 res = ServiceManager.start_all_services()
                 await asyncio.sleep(0.5)
-                return {"status": "success", "message": "Started all 3 swarm microservices.", "details": res}
+                return {"status": "success", "message": "Started all 3 swarm microservices (Triage: 8001, Resolution: 8002, Saboteur: 8003).", "details": res}
             else:
                 res = ServiceManager.start_service(svc)
                 await asyncio.sleep(0.5)
-                return {"status": "success", "message": f"Started {svc} service.", "details": res}
+                return {"status": "success", "message": f"Started {svc} service on its designated port.", "details": res}
 
         elif name == "stop_services":
             svc = args.get("service_name", "all")
@@ -190,7 +257,7 @@ class SwarmRAGEngine:
             target = args.get("target", "resolved")
             cleared = clear_unresolved_cases(status="resolved" if target == "resolved" else None)
             self.retriever.refresh()
-            return {"status": "success", "message": f"Flushed {cleared} cases from queue ({target})."}
+            return {"status": "success", "message": f"Flushed {cleared} cases from Dead-Letter Queue ({target})."}
 
         elif name == "flush_telemetry_records":
             rep_json = Path("reports/latest_report.json")
@@ -223,15 +290,75 @@ class SwarmRAGEngine:
         start_t = time.time()
         actions_executed: List[Dict[str, Any]] = []
 
-        # 1. Retrieve relevant chunks
+        # 1. Proactive Operational Intent Detection
+        detected_actions = detect_operational_actions(query)
+
+        # If operational actions were detected, execute them directly first!
+        if detected_actions:
+            action_reports = []
+            for tool_name, tool_args in detected_actions:
+                tool_res = await self.execute_tool(tool_name, tool_args)
+                actions_executed.append({
+                    "tool": tool_name,
+                    "arguments": tool_args,
+                    "result": tool_res
+                })
+                if tool_name == "start_services":
+                    action_reports.append(f"⚡ **Started Microservices:** `{tool_args.get('service_name', 'all').upper()}` (All services initiated).")
+                elif tool_name == "stop_services":
+                    action_reports.append(f"⏹️ **Stopped Microservices:** `{tool_args.get('service_name', 'all').upper()}`.")
+                elif tool_name == "restart_services":
+                    action_reports.append(f"🔄 **Restarted Microservices:** `{tool_args.get('service_name', 'all').upper()}`.")
+                elif tool_name == "replay_unresolved_cases":
+                    rep_sum = tool_res.get("summary", {})
+                    action_reports.append(f"🔄 **Replay Engine Executed:** {rep_sum.get('message', 'Replayed pending cases')}.")
+                elif tool_name == "flush_queue":
+                    action_reports.append(f"🧹 **Queue Flushed:** {tool_res.get('message')}.")
+                elif tool_name == "flush_telemetry_records":
+                    action_reports.append("🗑️ **Telemetry Flushed:** Evaluation reports cleared from disk.")
+                elif tool_name == "run_benchmark_evaluation":
+                    action_reports.append(f"🏆 **Benchmark Completed:** {tool_res.get('total_runs')} runs evaluated | Success Rate: `{tool_res.get('success_rate_pct')}%`.")
+
+            # Fetch updated system state
+            fresh_services = ServiceManager.get_all_statuses()
+            fresh_stats = get_queue_stats()
+
+            s1_badge = "🟢 ONLINE" if fresh_services["triage"]["healthy"] else "🔴 OFFLINE"
+            s2_badge = "🟢 ONLINE" if fresh_services["resolution"]["healthy"] else "🔴 OFFLINE"
+            s3_badge = "🟢 ONLINE" if fresh_services["saboteur"]["healthy"] else "🔴 OFFLINE"
+
+            response_lines = [
+                "### 🤖 Swarm Operational Action Executed\n",
+                "\n".join(action_reports),
+                "\n#### 🛰️ Updated System & Service Posture:",
+                f"- **Service 1 (Triage Agent):** `{s1_badge}` (Port {fresh_services['triage']['port']})",
+                f"- **Service 2 (Resolution Agent):** `{s2_badge}` (Port {fresh_services['resolution']['port']})",
+                f"- **Service 3 (Saboteur Chaos):** `{s3_badge}` (Port {fresh_services['saboteur']['port']})",
+                f"- **Dead-Letter Queue:** `{fresh_stats['pending_cases']}` pending backlog cases (`{fresh_stats['resolved_cases']}` resolved).",
+                "\n*All operational actions and verdicts are synchronized in real-time with the Control Room and Executive SOC Dashboard.*"
+            ]
+
+            latency_ms = round((time.time() - start_t) * 1000, 2)
+            return {
+                "query": query,
+                "answer": "\n".join(response_lines),
+                "actions_executed": actions_executed,
+                "sources": [],
+                "system_status": {
+                    "services": fresh_services,
+                    "queue_stats": fresh_stats
+                },
+                "latency_ms": latency_ms
+            }
+
+        # 2. Informational Q&A: Retrieve relevant chunks
         relevant_chunks: List[DocumentChunk] = self.retriever.retrieve(query, top_k=top_k)
 
-        # 2. Get live real-time system state
+        # 3. Get live real-time system state
         service_statuses = ServiceManager.get_all_statuses()
         queue_stats = get_queue_stats()
         pending_cases = get_unresolved_cases(status="pending")
 
-        # 3. Build live system state context block
         system_state_text = (
             f"CURRENT LIVE SYSTEM STATUS:\n"
             f"- Service 1 (Triage): {service_statuses['triage']['status']}\n"
@@ -243,99 +370,46 @@ class SwarmRAGEngine:
         if queue_stats["pending_cases"] > 0:
             system_state_text += f"- Pending Threat IDs waiting for replay: {', '.join([c['threat_id'] for c in pending_cases[:5]])}\n"
 
-        # 4. Assemble Knowledge Context Block
         retrieved_context_text = "\n\n---\n\n".join([
             f"Source [{c.doc_id}] ({c.title}):\n{c.content}"
             for c in relevant_chunks
         ])
 
         system_prompt = (
-            "You are the Threat Defense Swarm Agentic Incident Intelligence Assistant. "
-            "You have full operational capabilities to both analyze incidents and execute actions on behalf of the security operator.\n\n"
-            "Capabilities & Tools:\n"
-            "- You can start, stop, or restart microservices (`start_services`, `stop_services`, `restart_services`).\n"
-            "- You can trigger replay of unresolved backlog incidents (`replay_unresolved_cases`).\n"
-            "- You can flush queues or telemetry (`flush_queue`, `flush_telemetry_records`).\n"
-            "- You can launch automated benchmark evaluation suites (`run_benchmark_evaluation`).\n"
-            "- You can answer questions using the provided live system telemetry and retrieved knowledge.\n\n"
+            "You are the Threat Defense Swarm Incident Intelligence Assistant. "
+            "Your role is to provide accurate, concise, and structured cybersecurity incident analysis to human operators.\n\n"
             "Instructions:\n"
-            "1. If the user commands an operational action (e.g. 'start all services and replay unresolved cases', 'flush the queue'), "
-            "CALL the appropriate tool(s) to execute the request in real time.\n"
-            "2. After executing tools, synthesize a clear summary of what actions were performed and what outcomes were achieved.\n"
-            "3. If the user asks an informational question, consult the retrieved context and live system status to give a structured, cited answer.\n"
-            "4. Format responses cleanly with GitHub Markdown, bold key entities, and bullet points."
+            "1. Always consult the provided LIVE SYSTEM STATUS and RETRIEVED KNOWLEDGE CONTEXT.\n"
+            "2. Cite exact metrics (P50/P95 latency, success rate %, prompt injection defense rate) when asked about benchmark results.\n"
+            "3. If asked about unresolved or incomplete cases, explain why they failed (e.g. Service 2 downtime), list queued threat IDs, "
+            "and note that you can start services and replay them whenever instructed.\n"
+            "4. Format cleanly in GitHub Markdown with bold entity names and bullet points."
         )
 
         user_prompt = (
             f"{system_state_text}\n\n"
             f"RETRIEVED KNOWLEDGE CONTEXT:\n"
             f"{retrieved_context_text}\n\n"
-            f"USER QUERY/COMMAND: {query}"
+            f"USER QUESTION: {query}"
         )
 
         if self.client:
             try:
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ]
-
-                # Step 1: Initial call with tools
                 response = await self.client.chat.completions.create(
                     model=settings.openai_model,
-                    messages=messages,
-                    tools=RAG_TOOLS,
-                    tool_choice="auto",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
                     temperature=0.2,
                     max_tokens=800
                 )
-
-                msg = response.choices[0].message
-
-                # Step 2: Handle Tool Calls
-                if msg.tool_calls:
-                    messages.append(msg)
-                    for tool_call in msg.tool_calls:
-                        func_name = tool_call.function.name
-                        try:
-                            func_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
-                        except Exception:
-                            func_args = {}
-
-                        tool_res = await self.execute_tool(func_name, func_args)
-                        actions_executed.append({
-                            "tool": func_name,
-                            "arguments": func_args,
-                            "result": tool_res
-                        })
-
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": func_name,
-                            "content": json.dumps(tool_res)
-                        })
-
-                    # Step 3: Get final synthesized response from LLM
-                    final_response = await self.client.chat.completions.create(
-                        model=settings.openai_model,
-                        messages=messages,
-                        temperature=0.2,
-                        max_tokens=800
-                    )
-                    answer_text = final_response.choices[0].message.content or "Action executed successfully."
-                else:
-                    answer_text = msg.content or "No response generated."
-
+                answer_text = response.choices[0].message.content or "No response generated."
             except Exception as e:
-                logger.warning(f"OpenAI API call failed in RAG engine: {e}. Checking deterministic actions.")
-                answer_text, actions_executed = await self._deterministic_action_and_synthesis(
-                    query, system_state_text, relevant_chunks, queue_stats, pending_cases
-                )
+                logger.warning(f"OpenAI API call failed in RAG engine: {e}. Using deterministic synthesis.")
+                answer_text = self._deterministic_synthesis(query, system_state_text, relevant_chunks, queue_stats, pending_cases)
         else:
-            answer_text, actions_executed = await self._deterministic_action_and_synthesis(
-                query, system_state_text, relevant_chunks, queue_stats, pending_cases
-            )
+            answer_text = self._deterministic_synthesis(query, system_state_text, relevant_chunks, queue_stats, pending_cases)
 
         latency_ms = round((time.time() - start_t) * 1000, 2)
 
@@ -345,61 +419,24 @@ class SwarmRAGEngine:
             "actions_executed": actions_executed,
             "sources": [c.to_dict() for c in relevant_chunks],
             "system_status": {
-                "services": ServiceManager.get_all_statuses(),
-                "queue_stats": get_queue_stats()
+                "services": service_statuses,
+                "queue_stats": queue_stats
             },
             "latency_ms": latency_ms
         }
 
-    async def _deterministic_action_and_synthesis(
+    def _deterministic_synthesis(
         self,
         query: str,
         system_state: str,
         chunks: List[DocumentChunk],
         queue_stats: Dict[str, Any],
         pending_cases: List[Dict[str, Any]]
-    ) -> (str, List[Dict[str, Any]]):
-        """Deterministic action execution and context synthesis when LLM is offline."""
+    ) -> str:
+        """Deterministic context synthesis for informational queries when LLM is offline."""
         q_lower = query.lower()
-        actions: List[Dict[str, Any]] = []
-        action_notes: List[str] = []
 
-        # Action: Start all services
-        if "start" in q_lower or "up" in q_lower:
-            if "service" in q_lower or "all" in q_lower or "swarm" in q_lower:
-                res = await self.execute_tool("start_services", {"service_name": "all"})
-                actions.append({"tool": "start_services", "result": res})
-                action_notes.append("⚡ **Action Executed:** Started all 3 swarm microservices.")
-
-        # Action: Replay unresolved cases
-        if "replay" in q_lower or "resolve" in q_lower:
-            res = await self.execute_tool("replay_unresolved_cases", {})
-            actions.append({"tool": "replay_unresolved_cases", "result": res})
-            rep_msg = res.get("summary", {}).get("message", "Replayed pending backlog cases.")
-            action_notes.append(f"🔄 **Action Executed:** Replay Engine executed $\\rightarrow$ {rep_msg}")
-
-        # Action: Flush queue
-        if "flush" in q_lower and "queue" in q_lower:
-            target = "all" if "all" in q_lower or "entire" in q_lower else "resolved"
-            res = await self.execute_tool("flush_queue", {"target": target})
-            actions.append({"tool": "flush_queue", "result": res})
-            action_notes.append(f"🧹 **Action Executed:** {res.get('message')}")
-
-        if action_notes:
-            fresh_stats = get_queue_stats()
-            fresh_services = ServiceManager.get_all_statuses()
-            resp_lines = [
-                "### 🤖 Swarm Operational Action Completed\n",
-                "\n".join(action_notes),
-                "\n#### 🛰️ Updated System Posture:",
-                f"- **Service 1 (Triage):** `{fresh_services['triage']['status']}`",
-                f"- **Service 2 (Resolution):** `{fresh_services['resolution']['status']}`",
-                f"- **Pending Queue Backlog:** `{fresh_stats['pending_cases']}` cases remaining (`{fresh_stats['resolved_cases']}` resolved).",
-                "\n*All changes and resolved verdicts have been synchronized with `latest_report.json` and the Executive SOC Dashboard.*"
-            ]
-            return "\n".join(resp_lines), actions
-
-        # Q&A Synthesis
+        # Unresolved cases inquiry
         if any(k in q_lower for k in ["unresolved", "incomplete", "service 2", "down", "pending", "queue"]):
             lines = [
                 "### 🔍 Unresolved & Incomplete Incident Summary",
@@ -407,27 +444,35 @@ class SwarmRAGEngine:
                 f"- **Resolved Cases (Post-Replay):** `{queue_stats['resolved_cases']}`",
                 f"- **Total Queued Cases:** `{queue_stats['total_cases']}`\n",
                 "#### 🛡️ Resilience Architecture:",
-                "When **Service 2 (Resolution Agent)** is offline, Service 1 (Triage Agent) catches network timeouts and "
-                "safely routes the incident to the **Dead-Letter Queue (`data/unresolved_cases.json`)** with an `unresolved` verdict.\n"
+                "When **Service 2 (Resolution Agent)** is offline, Service 1 (Triage Agent) performs **3 exponential backoff retries**. "
+                "Upon exhausting retries, it produces an **`unresolved`** verdict with `success: false` and safely routes the incident into the "
+                "**Dead-Letter Queue (`data/unresolved_cases.json`)**.\n"
             ]
             if pending_cases:
-                lines.append("#### 📋 Current Pending Cases:")
+                lines.append("#### 📋 Current Pending Cases Waiting for Replay:")
                 for c in pending_cases[:5]:
-                    lines.append(f"- **{c.get('threat_id')}**: {c.get('failure_reason')}")
+                    lines.append(f"- **{c.get('threat_id')}** (`{c.get('run_id')}`): Intent `{c.get('intent_category')}` — Reason: *{c.get('failure_reason')}*")
+                lines.append("\n> 💡 **Action Item:** You can tell me **'Start all services and replay unresolved cases'** to resolve them automatically!")
             else:
-                lines.append("✅ **All cases are currently resolved.**")
-            return "\n".join(lines), actions
+                lines.append("✅ **All cases are currently resolved.** There are no pending cases in the backlog.")
+            return "\n".join(lines)
 
+        # Benchmark Metrics inquiry
         if any(k in q_lower for k in ["metric", "result", "success rate", "performance", "p50", "p95", "latency", "benchmark"]):
             report_chunk = next((c for c in chunks if c.doc_type == "report_metric"), None)
             if report_chunk:
-                return f"### 📊 Benchmark Performance\n\n{report_chunk.content}", actions
+                return (
+                    "### 📊 Benchmark Performance & Evaluation Results\n\n"
+                    f"{report_chunk.content}\n\n"
+                    f"#### 🛰️ Live Service State:\n"
+                    f"{system_state}"
+                )
 
+        # General inquiry
         return (
             "### 🤖 Swarm Intelligence Report\n\n"
             f"**Query:** *{query}*\n\n"
             f"**Live System Status:**\n{system_state}\n\n"
-            "**Retrieved Context:**\n"
-            + "\n".join([f"- **{c.title}**: {c.content[:200]}..." for c in chunks[:3]]),
-            actions
+            "**Retrieved Knowledge Evidence:**\n"
+            + "\n".join([f"- **{c.title}** ({c.doc_type}):\n  {c.content[:200]}..." for c in chunks[:3]])
         )
